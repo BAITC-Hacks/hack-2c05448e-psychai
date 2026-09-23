@@ -32,7 +32,9 @@ class SyntheticGraphTests(unittest.TestCase):
         graph = build_graph(nodes, edges)
         self.assertEqual(set(graph.nodes), set(nodes.gid))
         self.assertEqual(len(list(nx.weakly_connected_components(graph))), 2)
-        df = features(nodes, graph)
+        tx = edges[["src", "dst", "sum_kzt"]].copy()
+        tx["date"] = "2026-07-01"
+        df = features(nodes, graph, tx)
         self.assertTrue(bool(df.set_index("gid").loc[4, "truncated_by_depth"]))
         self.assertEqual(int(df.set_index("gid").loc[5, "in_deg"]), 0)
         df["cluster_id"] = df.gid.map(cluster_graph(graph))
@@ -53,12 +55,34 @@ class SyntheticGraphTests(unittest.TestCase):
             "n_tx": [1] * 9,
         })
         graph = build_graph(nodes, edges)
-        df = features(nodes, graph)
+        tx = edges[["src", "dst", "sum_kzt"]].copy()
+        tx["date"] = "2026-07-01"
+        df = features(nodes, graph, tx)
         df["cluster_id"] = df.gid.map(cluster_graph(graph))
         df, _ = classify(df)
         self.assertEqual(df.set_index("gid").loc[5, "role"], "consolidator")
         self.assertTrue(df.evidence.str.len().between(1, 200).all())
         self.assertTrue(df.role_score.between(0, 1).all())
+
+    def test_transit_requires_later_day_outflow(self):
+        nodes = pd.DataFrame({"gid": [1, 2, 3], "depth": [0, 1, 2],
+                              "is_seed": [True, False, False]})
+        edges = pd.DataFrame({"src": [1, 2], "dst": [2, 3],
+                              "sum_kzt": [10000.0, 10000.0], "n_tx": [1, 1]})
+        graph = build_graph(nodes, edges)
+        for incoming, outgoing, expected in (
+            ("2026-07-01", "2026-07-02", True),
+            ("2026-07-02", "2026-07-01", False),
+            ("2026-07-01", "2026-07-01", False),
+        ):
+            with self.subTest(incoming=incoming, outgoing=outgoing):
+                tx = edges[["src", "dst", "sum_kzt"]].copy()
+                tx["date"] = [incoming, outgoing]
+                df = features(nodes, graph, tx)
+                df, _ = classify(df)
+                middle = df.set_index("gid").loc[2]
+                self.assertEqual(middle.role == "transit", expected)
+                self.assertEqual(middle.temporal_support_kzt, 10000.0 if expected else 0.0)
 
 
 class FullDatasetTests(unittest.TestCase):

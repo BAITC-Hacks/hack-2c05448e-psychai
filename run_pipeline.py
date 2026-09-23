@@ -55,7 +55,7 @@ def build_graph(nodes: pd.DataFrame, edges: pd.DataFrame) -> nx.DiGraph:
     return graph
 
 
-def features(nodes: pd.DataFrame, graph: nx.DiGraph) -> pd.DataFrame:
+def features(nodes: pd.DataFrame, graph: nx.DiGraph, tx: pd.DataFrame) -> pd.DataFrame:
     df = nodes[["gid", "depth", "is_seed"]].copy().sort_values("gid").reset_index(drop=True)
     columns = {
         "in_deg": dict(graph.in_degree()),
@@ -77,6 +77,26 @@ def features(nodes: pd.DataFrame, graph: nx.DiGraph) -> pd.DataFrame:
             reach[gid] += 1
     df["seed_reach"] = df.gid.map(reach).astype(int)
     df["pass_through"] = np.where(df.in_kzt > 0, df.out_kzt / df.in_kzt.replace(0, np.nan), np.nan)
+    # Dates have no time of day. Count only outflows on a later calendar day
+    # against previously observed inflows; same-day order is unknown.
+    daily_in = tx.groupby(["dst", "date"]).sum_kzt.sum().to_dict()
+    daily_out = tx.groupby(["src", "date"]).sum_kzt.sum().to_dict()
+    dates = sorted(tx.date.unique())
+    supported = {}
+    for gid in df.gid:
+        available = forwarded = 0.0
+        for day in dates:
+            outgoing = daily_out.get((gid, day), 0.0)
+            used = min(available, outgoing)
+            forwarded += used
+            available -= used
+            available += daily_in.get((gid, day), 0.0)
+        supported[gid] = forwarded
+    df["temporal_support_kzt"] = df.gid.map(supported).fillna(0.0)
+    two_sided = np.minimum(df.in_kzt, df.out_kzt)
+    df["temporal_support_ratio"] = np.where(
+        two_sided > 0, df.temporal_support_kzt / two_sided.replace(0, np.nan), 0.0
+    )
     df["truncated_by_depth"] = (df.depth == 4) & (df.out_deg == 0)
     return df
 
@@ -128,10 +148,10 @@ def classify(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float]]:
             candidates.append((score, 3, "distributor", f"Отправляет {r.out_deg} получателям, видимый выход {r.out_kzt:,.0f} KZT; depth={r.depth}."))
         if (not r.is_seed and r.in_deg > 0 and r.out_deg > 0 and
                 min(r.in_kzt, r.out_kzt) >= thresholds["flow"] and
-                0.8 <= r.pass_through <= 1.2):
+                0.8 <= r.pass_through <= 1.2 and r.temporal_support_ratio >= 0.5):
             closeness = 1 - min(1, abs(math.log(r.pass_through)) / math.log(1.25))
             score = 0.6 + 0.4 * closeness
-            candidates.append((score, 2, "transit", f"Видимый вход {r.in_kzt:,.0f}, выход {r.out_kzt:,.0f} KZT; выход/вход={r.pass_through:.2f}."))
+            candidates.append((score, 2, "transit", f"Вход {r.in_kzt:,.0f}, выход {r.out_kzt:,.0f} KZT; выход/вход={r.pass_through:.2f}; после видимого входа в более поздние дни ушло до {r.temporal_support_kzt:,.0f} KZT."))
         if (r.in_deg >= 2 and r.out_deg >= 2 and r.seed_reach >= 2 and
                 r.pagerank >= thresholds["pagerank"]):
             score = 0.8 + 0.2 * pr_rank[i]
@@ -172,6 +192,8 @@ def rank_nodes(df: pd.DataFrame) -> pd.DataFrame:
     df["why"] = df.apply(
         lambda r: f"{r.role}: {r.in_deg} входящих / {r.out_deg} исходящих связей, "
                   f"видимый оборот {r.in_kzt + r.out_kzt:,.0f} KZT, связь с {r.seed_reach} seed"
+                  + (f"; выход после входа до {r.temporal_support_kzt:,.0f} KZT"
+                     if r.role == "transit" else "")
                   + ("; граница 4-го колена" if r.truncated_by_depth else ""),
         axis=1,
     )
@@ -181,7 +203,7 @@ def rank_nodes(df: pd.DataFrame) -> pd.DataFrame:
 def outputs(df: pd.DataFrame, edges: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     roles = df[NODE_COLUMNS + ["depth", "is_seed", "in_deg", "out_deg", "in_kzt", "out_kzt",
                                "in_tx", "out_tx", "pagerank", "seed_reach", "pass_through",
-                               "truncated_by_depth"]].copy()
+                               "temporal_support_kzt", "temporal_support_ratio", "truncated_by_depth"]].copy()
     grouped = edges.assign(src_cluster=edges.src.map(dict(zip(df.gid, df.cluster_id))),
                            dst_cluster=edges.dst.map(dict(zip(df.gid, df.cluster_id))))
     internal = grouped.loc[grouped.src_cluster == grouped.dst_cluster].groupby("src_cluster").sum_kzt.sum()
@@ -209,6 +231,8 @@ def validate_outputs(roles: pd.DataFrame, clusters: pd.DataFrame, top: pd.DataFr
         raise ValueError("Score outside [0,1]")
     if roles.evidence.isna().any() or not roles.evidence.str.len().between(1, 200).all():
         raise ValueError("Missing or oversized evidence")
+    if not roles.temporal_support_ratio.between(0, 1.000001).all():
+        raise ValueError("Temporal support ratio outside [0,1]")
     if clusters.empty or clusters.cluster_id.duplicated().any() or set(roles.cluster_id) != set(clusters.cluster_id):
         raise ValueError("Invalid clusters")
     if int(clusters.n_nodes.sum()) != len(nodes) or clusters[CLUSTER_COLUMNS].isna().any().any():
@@ -221,9 +245,9 @@ def validate_outputs(roles: pd.DataFrame, clusters: pd.DataFrame, top: pd.DataFr
 
 def run(data_dir: Path, out_dir: Path) -> dict[str, float]:
     started = time.perf_counter()
-    nodes, edges, _ = load_and_validate(data_dir)
+    nodes, edges, tx = load_and_validate(data_dir)
     graph = build_graph(nodes, edges)
-    df = features(nodes, graph)
+    df = features(nodes, graph, tx)
     clusters = cluster_graph(graph)
     df["cluster_id"] = df.gid.map(clusters).astype(int)
     df, thresholds = classify(df)

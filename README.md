@@ -78,51 +78,67 @@ Parquet → input validation → directed graph → graph features
 
 **The mandatory analytical core is deterministic and does not depend on an LLM.** Every assigned role and priority must be traceable to calculated graph features. The viewer and any optional AI assistant must not be required for generating the CSVs.
 
-## Planned stack
+## System requirements and dependencies
 
-- **Python 3.10+:** one-command local pipeline, standard-library HTTP viewer, and tests.
-- **pandas + pyarrow:** reading Parquet and writing CSV.
-- **NetworkX + SciPy + NumPy:** directed features, PageRank and Louvain communities. SciPy is needed by NetworkX's PageRank implementation.
+- **Verified environment:** 64-bit Windows 10 and 64-bit Python 3.10.11. The macOS/Linux commands below use the same Python code but have not been independently verified on those systems.
+- **Python:** use a 64-bit Python 3.10 installation and its `venv`/`pip` modules. A standard web browser is needed for the viewer.
+- **Install-time access:** `pip install` needs access to the Python package index or an equivalent local wheel cache. After installation, the pipeline and viewer run locally without internet access.
+- **Input files:** `data/nodes.parquet`, `data/edges.parquet`, and `data/transactions.parquet` are committed to this repository. No separate dataset download is needed.
+- **Python packages:** exact versions of pandas, pyarrow, NetworkX, NumPy and SciPy are pinned in `requirements.txt`. SciPy is used by NetworkX's PageRank.
+- **Configuration:** no environment variables, API keys, model downloads, personal accounts, subscriptions, or external services are required. The viewer listens only on `127.0.0.1:8765` by default. `--data`, `--out`, `--host`, and `--port` are optional command-line parameters where applicable.
 
-No LLM, API key, paid service or GPU is needed.
+No LLM or GPU is needed.
 
-## Install and run
+## Install, run and verify
 
-From the repository root:
+Run these commands from the repository root, which contains `README.md`, `requirements.txt`, `run_pipeline.py`, `viewer.py`, and `data/`. On Windows PowerShell:
 
-```text
+```powershell
+python --version
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 .venv\Scripts\python run_pipeline.py
-.venv\Scripts\python viewer.py
-```
-
-On macOS/Linux replace `.venv\Scripts\python` with `.venv/bin/python`. Open `http://127.0.0.1:8765/` and enter any `gid` from `nodes_roles.csv`. The viewer is local and read-only; its default output directory is `out/`. To use other paths, run `python run_pipeline.py --data PATH --out PATH` and pass the same options to `viewer.py`. No environment variables or personal accounts are required.
-
-Run checks:
-
-```text
 .venv\Scripts\python -m unittest discover -s tests -v
 ```
 
+Expected result: `run_pipeline.py` prints `Validated 2248 nodes, 3119 edges`, a runtime under 300 seconds, and the absolute output path. It creates `out/nodes_roles.csv` (2,248 data rows), `out/clusters.csv` (66 data rows on the supplied dataset), and `out/top_nodes.csv` (20 data rows). The test command must finish with `Ran 4 tests` and `OK`. It reruns the pipeline in temporary directories and verifies CSV schema, determinism, depth-4 handling, temporal ordering and arbitrary `gid` lookup. `out/` is generated locally and intentionally excluded from Git.
+
+Then start the viewer in the same terminal; leave it running while using the browser:
+
+```powershell
+.venv\Scripts\python viewer.py
+```
+
+Open the local URL printed by the viewer (normally `http://127.0.0.1:8765/`). The page opens a top-ranked node by default. Enter any exact `gid` copied from `out/nodes_roles.csv`, press **Показать**, and verify that the node's role, numerical evidence, cluster and directed incoming/outgoing links appear. The search field is text so 18-digit IDs are not rounded by the browser. Stop the viewer with `Ctrl+C`. No login or network connection is involved.
+
+On macOS/Linux, use `python3 -m venv .venv`, then replace `.venv\Scripts\python` in the commands above with `.venv/bin/python`. If port 8765 is occupied, start `viewer.py --port 8766` and open the URL it prints. To use nondefault folders, run `run_pipeline.py --data PATH --out PATH` and then `viewer.py --data PATH --out PATH` with the same paths. If an input file is missing or malformed, the pipeline exits with an explanatory error; it does not silently generate placeholder results.
+
 ## Role rules and explanation
 
-The pipeline calculates visible in/out degrees, KZT totals, transaction counts, weighted PageRank, seed reach, depth and `out_kzt / in_kzt`. Only observed transfers are described. Role cutoffs are derived from the input distribution and printed at each run. For the supplied dataset, the measured cutoffs are: fan-in ≥3, fan-out ≥8, incoming KZT ≥166,819.7, outgoing KZT ≥397,500, PageRank ≥0.00180444, and minimum two-sided flow ≥43,500 KZT.
+The pipeline calculates visible in/out degrees, KZT totals, transaction counts, weighted PageRank, seed reach, depth, `out_kzt / in_kzt`, and later-day flow support from individual transaction dates. Only observed transfers are described. Role cutoffs are derived from the input distribution and printed at each run. For the supplied dataset, the measured cutoffs are: fan-in ≥3, fan-out ≥8, incoming KZT ≥166,819.7, outgoing KZT ≥397,500, PageRank ≥0.00180444, and minimum two-sided flow ≥43,500 KZT.
 
 | Role | Deterministic candidate rule |
 | --- | --- |
 | `consolidator` | Fan-in at/above the 90th percentile of positive in-degrees (minimum 3) **and** visible incoming sum at/above the 75th percentile. A seed's role score is capped because its incoming flow is incomplete. |
 | `distributor` | Fan-out at/above the 90th percentile of positive out-degrees (minimum 3) **and** visible outgoing sum at/above the 75th percentile. |
-| `transit` | Non-seed with visible input and output, minimum of those amounts at/above the median two-sided flow, and `out_kzt / in_kzt` in `[0.8, 1.2]`. |
+| `transit` | Non-seed with visible input and output, minimum of those amounts at/above the median two-sided flow, `out_kzt / in_kzt` in `[0.8, 1.2]`, and later-day supported outflow at least 50% of the smaller visible in/out total. |
 | `terminal` | Non-seed at depth below 4, with a visible incoming edge and no visible outgoing edge. This is only a possible endpoint *within the export*. |
 | `coordinator` | At least two incoming and two outgoing counterparties, reachable from at least two seeds, and PageRank at/above its 98th percentile. This indicates structural importance, not an identified organizer. |
 | `peripheral` | No stronger candidate; depth-4 truncated nodes with no outgoing edge stay here rather than becoming `terminal`. |
+
+For later-day support, the pipeline processes each node's daily transaction totals in date order. An outgoing amount can use only previously observed incoming amount from an earlier **calendar day**; same-day ordering is unknown and provides no support. This is a conservative structural check, not a tracing of individual banknotes or proof that the funds are identical. The 50% cutoff is an explicit heuristic, not a learned or regulatory threshold. `nodes_roles.csv` includes `temporal_support_kzt` and `temporal_support_ratio` for inspection.
 
 When multiple rules match, the strongest bounded role signal wins with a fixed tie order. `role_score` is the strength of visible evidence, **not a calibrated probability**. Every row includes numbers in `evidence`. The score and evidence do not imply guilt.
 
 Louvain partitions an undirected projection using log-scaled transfer weights and a fixed seed. Direction is retained in role features, internal cluster sums, and the viewer. Cluster IDs are ordered by their smallest `gid`. The cluster `hypothesis` is generated from observed size, seed count and internal volume; it is not a criminal allegation.
 
 `priority_score` aggregates equal-weight percentile ranks of role signal, counterparties, visible volume and structural position/seed reach; the final score is ranked to `[0,1]`. Depth-4 truncated endpoints receive a reduction because downstream activity is unknown. Ties use ascending `gid`. `top_nodes.csv` includes concrete values in `why`. Equal weights are a transparent starting assumption, not domain-calibrated risk weights.
+
+## Research-informed interpretation
+
+The [IBM AMLworld paper](https://proceedings.neurips.cc/paper_files/paper/2023/file/5f38404edff6f3f642d6fa5892479c42-Paper-Datasets_and_Benchmarks.pdf) defines fan-in, fan-out, gather-scatter and other **transaction subgraph patterns**. They help describe why our visible in/out-degree rules are useful, but they are not labels for individual clients and do not establish laundering. In particular, `transit` combines a similar *monthly total* with later-day support; it does not prove that the same funds moved onward. `coordinator` is based on seed reach and PageRank; the pipeline does not claim to detect cycles or ownership. The [IBM dataset description](https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml) also explains why a bank's partial view matters, supporting our explicit depth and seed caveats.
+
+IBM AMLworld and [SAML-D](https://www.kaggle.com/datasets/berkanoztas/synthetic-transaction-monitoring-dataset-aml/versions/2) contain synthetic suspicious-transaction labels. They are potential **separate** stress-test data, not a ground truth for this case's six roles. A valid transfer test would need to recreate this case's one-month, outgoing-only, four-hop, 5,000-KZT observation window and separately define what a flagged *node* means before reporting precision or recall. No such external benchmark has been run here, and neither dataset is required to reproduce the submission.
 
 ## Scalability
 
@@ -141,7 +157,7 @@ The supplied 2,248-node graph runs locally in seconds. At about one million node
 
 ## Development status
 
-The first deterministic pipeline and local viewer are implemented. On the provided data, the pipeline produced 2,248 role rows, 66 clusters and 20 top rows in 3.95 seconds. Three unittest cases passed, including deterministic reruns, depth-4 protection and arbitrary-`gid` viewer rendering; one HTTP request to the viewer returned status 200. These checks establish basic operation, not expert validation of AML role quality.
+The deterministic pipeline and local viewer are implemented. On the provided data, the pipeline produces 2,248 role rows, 66 clusters and 20 top rows in seconds. Four unittest cases passed, including deterministic reruns, depth-4 protection, later-day transit checks and arbitrary-`gid` viewer rendering; one HTTP request to the viewer returned status 200. These checks establish basic operation, not expert validation of AML role quality.
 
 ## Sources and attribution
 
