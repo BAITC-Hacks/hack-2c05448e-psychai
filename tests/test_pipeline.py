@@ -170,6 +170,10 @@ class FullDatasetTests(unittest.TestCase):
             self.assertIn("Группы с крупнейшим внутренним оборотом", rendered)
             self.assertIn(f">{int(roles.is_seed.sum())}</strong><span>исходных клиентов", rendered)
             self.assertIn("Это не баланс группы и не рейтинг угроз", rendered)
+            self.assertIn('aria-label="Распределение ролей в сети"', rendered)
+            self.assertIn('class="flow-panel"', rendered)
+            self.assertIn("Толщина стрелки отражает сумму", rendered)
+            self.assertIn('href="#top"', rendered)
 
 
 if __name__ == "__main__":

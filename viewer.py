@@ -49,6 +49,7 @@ def svg_for(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame) -> str:
     # keep a 2,248-node network legible on an ordinary laptop.
     left = list(incoming.head(16).itertuples(index=False))
     right = list(outgoing.head(16).itertuples(index=False))
+    max_kzt = max((float(row.sum_kzt) for row in left + right), default=1.0)
     height = max(340, 95 + 44 * max(len(left), len(right)))
     center_y = height / 2
     parts = [
@@ -73,15 +74,17 @@ def svg_for(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame) -> str:
                      f'font-size="11" fill="#172033">{value}</text>')
     for index, row in enumerate(left):
         y = 70 + index * 44
+        width = 1.5 + 4 * (float(row.sum_kzt) / max_kzt) ** 0.5
         parts.append(f'<line x1="210" y1="{y}" x2="472" y2="{center_y:.1f}" stroke="#64748b" '
-                     'stroke-width="2" marker-end="url(#arrow)"/>')
+                     f'stroke-width="{width:.1f}" marker-end="url(#arrow)"/>')
         parts.append(f'<text x="285" y="{(y + center_y) / 2 - 5:.1f}" font-size="11" fill="#475569">'
                      f'{row.sum_kzt:,.0f} KZT</text>')
         node(175, y, int(row.src))
     for index, row in enumerate(right):
         y = 70 + index * 44
+        width = 1.5 + 4 * (float(row.sum_kzt) / max_kzt) ** 0.5
         parts.append(f'<line x1="528" y1="{center_y:.1f}" x2="790" y2="{y}" stroke="#64748b" '
-                     'stroke-width="2" marker-end="url(#arrow)"/>')
+                     f'stroke-width="{width:.1f}" marker-end="url(#arrow)"/>')
         parts.append(f'<text x="650" y="{(y + center_y) / 2 - 5:.1f}" font-size="11" fill="#475569">'
                      f'{row.sum_kzt:,.0f} KZT</text>')
         node(825, y, int(row.dst))
@@ -115,10 +118,23 @@ def page(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame, clusters: pd.DataFr
         depth_note = ('<p class="caution">Узел на четвёртом колене: обход здесь заканчивается. '
                       'Отсутствие исходящих стрелок не означает, что переводов дальше не было.</p>'
                       if bool(row.truncated_by_depth) else "")
-        body = (f'<section class="card" id="node"><h2>Клиент gid {gid}</h2>'
+        largest_flow = max(float(row.in_kzt), float(row.out_kzt), 1.0)
+        flow = (
+            '<div class="flow-panel"><div class="flow-item"><span>← Видимый вход</span>'
+            f'<strong>{row.in_kzt:,.0f} KZT</strong><small>{int(row.in_deg)} отправителей</small>'
+            f'<div class="flow-track"><div class="flow-fill incoming" style="width:{100 * row.in_kzt / largest_flow:.1f}%"></div></div></div>'
+            '<div class="flow-item"><span>Видимый выход →</span>'
+            f'<strong>{row.out_kzt:,.0f} KZT</strong><small>{int(row.out_deg)} получателей</small>'
+            f'<div class="flow-track"><div class="flow-fill outgoing" style="width:{100 * row.out_kzt / largest_flow:.1f}%"></div></div></div></div>'
+            '<p class="microcopy">Длина полос сравнивает только вход и выход этого клиента в данной выгрузке; это не его баланс.</p>'
+        )
+        body = (f'<section class="card node-card" id="node" style="--role-color:{COLORS[str(row.role)]}">'
+                '<p class="section-kicker">Карточка клиента</p>'
+                f'<h2>Клиент gid {gid}</h2>'
                 f'<p class="role"><span class="dot" style="background:{COLORS[str(row.role)]}"></span>'
                 f'<strong>{html.escape(role_name)}</strong> <small>({html.escape(str(row.role))})</small></p>'
                 f'<p>{html.escape(role_meaning)}</p>'
+                f'{flow}'
                 f'<p class="evidence"><strong>Почему выбрана эта роль:</strong> {html.escape(str(row.evidence))}</p>'
                 f'<div class="scores"><p><strong>Сила признаков роли: {row.role_score:.3f}</strong><br>'
                 'Насколько явно проявились признаки выбранной роли. Это не вероятность преступления.</p>'
@@ -132,6 +148,7 @@ def page(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame, clusters: pd.DataFr
                 f'<p><strong>Гипотеза о группе:</strong> {html.escape(str(cluster.hypothesis))}</p></div>'
                 '<h3>Куда идут стрелки</h3><p>Слева — клиенты, от которых получены переводы. '
                 'Справа — клиенты, которым отправлены переводы. Нажмите на круг, чтобы перейти к этому клиенту. '
+                'Толщина стрелки отражает сумму видимых переводов по этой связи. '
                 'Показаны до 16 крупнейших рёбер в каждом направлении; счётчики выше учитывают все связи.</p>'
                 f'<div class="graph">{svg_for(gid, nodes, edges)}</div></section>')
     top_rows = "".join(
@@ -144,11 +161,16 @@ def page(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame, clusters: pd.DataFr
         for role, color in COLORS.items()
     )
     role_counts = nodes.role.value_counts()
+    role_segments = "".join(
+        f'<span style="width:{100 * int(role_counts.get(role, 0)) / len(nodes):.3f}%;background:{color}" '
+        f'title="{html.escape(ROLE_INFO[role][0])}: {int(role_counts.get(role, 0))}"></span>'
+        for role, color in COLORS.items()
+    )
     role_bars = "".join(
         f'<div class="role-row"><span><span class="dot" style="background:{color}"></span>'
         f'{html.escape(ROLE_INFO[role][0])}</span><div class="bar-track">'
         f'<div class="bar-fill" style="width:{100 * int(role_counts.get(role, 0)) / len(nodes):.1f}%;'
-        f'background:{color}"></div></div><strong>{int(role_counts.get(role, 0))}</strong></div>'
+        f'background:{color}"></div></div><strong>{int(role_counts.get(role, 0)):,}</strong></div>'
         for role, color in COLORS.items()
     )
     # Turnover is a descriptive sort key, not a fraud score. Each transfer is
@@ -170,9 +192,10 @@ def page(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame, clusters: pd.DataFr
         f'<div><strong>{len(edges):,}</strong><span>направленных связей</span></div>'
         f'<div><strong>{int(nodes.is_seed.sum()):,}</strong><span>исходных клиентов</span></div>'
         f'<div><strong>{len(clusters):,}</strong><span>групп связей</span></div>'
-        '</div><div class="dashboard-grid"><div><h3>Роли в этой выгрузке</h3>'
+        '</div><div class="dashboard-grid"><div class="panel"><h3>Роли в этой выгрузке</h3>'
         '<p>Каждый клиент отнесён к одной роли по наблюдаемым признакам.</p>'
-        f'{role_bars}</div><div><h3>Группы с крупнейшим внутренним оборотом</h3>'
+        f'<div class="composition" role="img" aria-label="Распределение ролей в сети">{role_segments}</div>'
+        f'{role_bars}</div><div class="panel"><h3>Группы с крупнейшим внутренним оборотом</h3>'
         '<p>Сумма видимых переводов между участниками группы. Это не баланс группы и не рейтинг угроз.</p>'
         '<div class="table-wrap"><table><thead><tr><th>Группа</th><th>Клиенты</th>'
         '<th>Исходные</th><th>Оборот</th><th></th></tr></thead>'
@@ -188,32 +211,58 @@ def page(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame, clusters: pd.DataFr
     )
     return f"""<!doctype html><html lang="ru"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Граф денег — разбор сети</title>
-<style>body{{font:16px/1.5 system-ui;margin:0;background:#f3f6fb;color:#172033}}
-main{{max-width:1120px;margin:auto;padding:1.5rem}}h1{{margin:.2rem 0}}h2{{margin-top:0}}
-.card{{background:white;border:1px solid #d8e0eb;border-radius:12px;padding:1.2rem;margin:1rem 0}}
-.intro{{background:#e7f0ff}}.caution{{background:#fff5dc;border-left:4px solid #b45309;padding:.7rem}}
-.evidence,.cluster{{background:#eef4fa;padding:.8rem;border-radius:8px}}.scores{{display:flex;gap:1rem;flex-wrap:wrap}}
-.scores p{{flex:1;min-width:240px;background:#f7f9fd;padding:.8rem;border-radius:8px}}
-form{{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}}input,button{{font:inherit;padding:.5rem}}
-input{{width:22ch;max-width:100%}}button{{background:#1d4ed8;color:white;border:0;border-radius:6px;cursor:pointer}}
-table{{border-collapse:collapse;width:100%}}th,td{{border-bottom:1px solid #d8e0eb;padding:.5rem;text-align:left;vertical-align:top}}
-th{{font-weight:600}}.table-wrap,.graph{{overflow-x:auto}}svg{{width:100%;min-width:680px;border:1px solid #d8e0eb}}
-.dot{{display:inline-block;width:.8em;height:.8em;border-radius:50%;margin-right:.35em}}.legend{{display:flex;gap:.8rem;flex-wrap:wrap}}
-.stats{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.7rem}}
-.stats div{{background:#eef4fa;border-radius:8px;padding:.8rem;display:flex;flex-direction:column}}
-.stats strong{{font-size:1.6rem;font-variant-numeric:tabular-nums}}.stats span{{color:#52647c}}
-.dashboard-grid{{display:grid;grid-template-columns:minmax(240px,1fr) minmax(0,2fr);gap:1.5rem}}
-.role-row{{display:grid;grid-template-columns:165px 1fr 35px;gap:.5rem;align-items:center;margin:.45rem 0}}
-.role-row strong{{text-align:right}}.bar-track{{height:.75rem;background:#e8edf5;border-radius:10px;overflow:hidden}}
-.bar-fill{{height:100%;border-radius:10px}}@media(max-width:780px){{.dashboard-grid{{grid-template-columns:1fr}}}}
-a{{color:#1d4ed8}}small{{color:#52647c}}.role{{font-size:1.25rem}}</style>
-<main><h1>Граф денег</h1><p>{len(nodes)} клиента · {len(edges)} направленных связей · {len(clusters)} групп</p>
-<section class="card intro"><h2>Что показывает этот экран</h2>
-<p>Это карта <strong>видимой части</strong> переводов. Выберите клиента по номеру gid, чтобы увидеть,
-от кого ему поступали деньги, кому он отправлял их дальше и почему программа предложила его роль.
-Результат — подсказка для проверки аналитиком, а не обвинение.</p></section>
+<style>
+:root{{color-scheme:light}}*{{box-sizing:border-box}}html{{scroll-behavior:smooth}}
+body{{font:16px/1.5 system-ui;margin:0;background:#eef2f7;color:#172033}}
+main{{max-width:1220px;margin:auto;padding:1.2rem 1.4rem 3rem}}
+h1{{font-size:clamp(2rem,4vw,3rem);letter-spacing:-.04em;line-height:1.1;margin:.35rem 0}}
+h2{{margin:0 0 .55rem;letter-spacing:-.02em}}h3{{margin:.2rem 0 .5rem}}
+p{{margin:.55rem 0 1rem}}a{{color:#1d4ed8}}a:hover{{text-decoration-thickness:2px}}
+.hero{{background:linear-gradient(115deg,#142a4b,#234b77);color:#fff;border-radius:20px;padding:1.5rem 2rem;box-shadow:0 12px 30px #142a4b22}}
+.hero p{{max-width:850px;color:#e1ecfa;margin:.7rem 0 1rem}}.eyebrow,.section-kicker{{text-transform:uppercase;letter-spacing:.13em;font-size:.72rem;font-weight:800}}
+.eyebrow{{color:#a8d6ff}}.hero nav{{display:flex;flex-wrap:wrap;gap:.55rem;margin-top:1.2rem}}
+.hero nav a{{color:white;text-decoration:none;border:1px solid #ffffff66;border-radius:999px;padding:.35rem .8rem;font-size:.9rem}}
+.hero nav a:hover,.hero nav a:focus{{background:#ffffff2a}}.hero strong{{color:#fff}}
+.card{{background:#fff;border:1px solid #dce5ef;border-radius:16px;padding:1.4rem;margin:1rem 0;box-shadow:0 3px 16px #142a4b0b}}
+.card>p:first-of-type{{color:#52647c}}.caution{{background:#fff5dc;border-left:4px solid #b45309;padding:.8rem;border-radius:6px}}
+.stats{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.8rem;margin:1rem 0 1.3rem}}
+.stats div{{background:#f1f6fb;border:1px solid #e1eaf4;border-radius:12px;padding:1rem;display:flex;flex-direction:column;min-height:102px}}
+.stats strong{{font-size:clamp(1.55rem,2.6vw,2.1rem);letter-spacing:-.04em;font-variant-numeric:tabular-nums;line-height:1.15}}
+.stats span{{color:#52647c;margin-top:.35rem;font-size:.9rem}}
+.dashboard-grid{{display:grid;grid-template-columns:minmax(315px,.95fr) minmax(0,1.5fr);gap:1rem}}
+.panel{{border:1px solid #e2eaf4;border-radius:12px;padding:1.1rem;min-width:0}}
+.panel>p{{color:#52647c;font-size:.92rem}}.composition{{display:flex;height:17px;border-radius:999px;overflow:hidden;background:#e8edf5;margin:1.2rem 0}}
+.composition span{{display:block;min-width:1px}}.role-row{{display:grid;grid-template-columns:minmax(140px,1fr) 76px 48px;gap:.45rem;align-items:center;margin:.45rem 0;font-size:.85rem}}
+.role-row strong{{text-align:right;font-variant-numeric:tabular-nums}}.bar-track,.flow-track{{background:#e8edf5;border-radius:999px;overflow:hidden}}
+.bar-track{{height:.6rem}}.bar-fill,.flow-fill{{height:100%;border-radius:999px}}
+.table-wrap,.graph{{overflow-x:auto}}table{{border-collapse:collapse;width:100%;font-size:.92rem}}
+th,td{{border-bottom:1px solid #e2eaf4;padding:.65rem .45rem;text-align:left;vertical-align:top}}
+th{{font-weight:700;color:#40536e;background:#f8fafc}}tbody tr:hover{{background:#f7faff}}
+form{{display:flex;gap:.65rem;align-items:center;flex-wrap:wrap}}input[type=text],button{{font:inherit;padding:.62rem .75rem}}
+input[type=text]{{width:23ch;max-width:100%;border:1px solid #b9c8da;border-radius:8px}}
+button{{background:#1d4ed8;color:white;border:0;border-radius:8px;cursor:pointer;font-weight:650}}
+button:hover{{background:#173fae}}:focus-visible{{outline:3px solid #f59e0b;outline-offset:2px}}
+.node-card{{border-top:5px solid var(--role-color)}}.section-kicker{{color:#637b9a;margin:0 0 .25rem}}
+.role{{font-size:1.2rem;margin:.5rem 0}}.dot{{display:inline-block;width:.8em;height:.8em;border-radius:50%;margin-right:.4em;vertical-align:baseline}}
+.flow-panel{{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin:1.2rem 0 .2rem}}
+.flow-item{{background:#f4f8fc;border:1px solid #e1eaf4;border-radius:12px;padding:1rem;display:flex;flex-direction:column}}
+.flow-item strong{{font-size:1.35rem;letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin:.2rem 0}}
+.flow-item span,.flow-item small,.microcopy{{color:#52647c}}.flow-track{{height:.72rem;margin-top:.7rem}}
+.incoming{{background:#2563eb}}.outgoing{{background:#ea580c}}.microcopy{{font-size:.85rem;margin:.25rem 0 1rem}}
+.evidence,.cluster{{background:#eef4fa;padding:1rem;border-radius:10px}}.scores{{display:flex;gap:.8rem;flex-wrap:wrap}}
+.scores p{{flex:1;min-width:240px;background:#f6f9fd;padding:1rem;border-radius:10px;margin:.2rem 0 1rem}}
+.graph svg{{width:100%;min-width:680px;border:1px solid #d8e0eb;background:#fbfdff;border-radius:10px}}
+.legend{{display:flex;gap:.8rem;flex-wrap:wrap}}small{{color:#52647c}}
+@media(max-width:850px){{.dashboard-grid{{grid-template-columns:1fr}}.stats{{grid-template-columns:repeat(2,minmax(0,1fr))}}}}
+@media(max-width:560px){{main{{padding:.7rem}}.hero{{padding:1.2rem}}.card{{padding:1rem}}.flow-panel{{grid-template-columns:1fr}}}}
+</style>
+<main><header class="hero"><div class="eyebrow">HackAlem AI · Объяснимый анализ переводов</div>
+<h1>Граф денег</h1><p>Карта <strong>видимой части</strong> переводов: от обзора сети к конкретному клиенту и его связям.
+Роли и приоритеты подсказывают порядок ручной проверки, но не устанавливают виновность.</p>
+<nav aria-label="Разделы отчёта"><a href="#overview">Обзор сети</a><a href="#search">Поиск клиента</a>
+<a href="#node">Карточка клиента</a><a href="#top">Топ-20 для проверки</a></nav></header>
 {summary}
-<section class="card"><form method="get"><label for="gid"><strong>Номер клиента (gid)</strong></label>
+<section class="card" id="search"><h2>Найти клиента</h2><form method="get"><label for="gid"><strong>Номер клиента (gid)</strong></label>
 <input id="gid" name="gid" type="text" inputmode="numeric" pattern="[0-9]+" value="{gid}" required>
 <button type="submit">Показать</button></form>
 <p><small>Можно скопировать gid из таблицы ниже или из nodes_roles.csv. Длинный номер не округляется.</small></p></section>
