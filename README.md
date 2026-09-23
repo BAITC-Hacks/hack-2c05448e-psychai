@@ -12,7 +12,7 @@ Build a locally reproducible pipeline and graph viewer that assign an explainabl
 
 ## Input
 
-The organizer's dataset is expected in `data/`; it is **not yet present in this repository**. The case specification describes:
+The organizer's dataset is included in `data/`. Its schema is documented in `data/README.md`:
 
 | File | Specified fields | Specified size |
 | --- | --- | ---: |
@@ -20,7 +20,7 @@ The organizer's dataset is expected in `data/`; it is **not yet present in this 
 | `nodes.parquet` | `gid`, `depth`, `is_seed` | 2,248 nodes |
 | `transactions.parquet` | `src`, `dst`, `date`, `sum_kzt` | 4,840 transactions |
 
-The dataset README and exact file schemas must be checked when the starter kit arrives.
+The supplied files were checked for row counts, unique identifiers, non-null required fields, and agreement between aggregated edges and individual transactions.
 
 ## Required outputs
 
@@ -59,7 +59,7 @@ These are **analytical hypotheses**, not statements that a client committed a cr
 
 ## Known data limitations
 
-These are properties of the supplied graph described in the case specification; they have not yet been checked against the actual files.
+These are properties of the supplied graph described in the case specification and considered by the implementation.
 
 - **Depth-4 truncation:** traversal stops after four hops. The 444 nodes at `depth=4` with no visible outgoing edge cannot automatically be treated as true terminal recipients.
 - **Outgoing-only collection:** the export follows outgoing transfers from seeds. Visible incoming and outgoing amounts do not establish full account balances.
@@ -68,7 +68,7 @@ These are properties of the supplied graph described in the case specification; 
 - **Disconnected components:** the specification reports 16 weakly connected components; analysis must not assume one connected network.
 - **No role ground truth:** the dataset has no labeled true roles. Role quality is judged by transparent, defensible criteria rather than classification accuracy.
 
-## Proposed minimal architecture
+## Architecture
 
 ```text
 Parquet → input validation → directed graph → graph features
@@ -80,23 +80,71 @@ Parquet → input validation → directed graph → graph features
 
 ## Planned stack
 
-- **Python:** one-command local pipeline and validation.
-- **pandas + pyarrow:** reading the specified Parquet inputs and writing tabular outputs.
-- **NetworkX:** directed graph metrics and initial clustering on the specified 2,248-node network. Performance will be measured against the five-minute limit.
-- **Viewer:** lightweight implementation to be chosen after inspecting the organizer's starter kit; no frontend framework is committed yet.
+- **Python 3.10+:** one-command local pipeline, standard-library HTTP viewer, and tests.
+- **pandas + pyarrow:** reading Parquet and writing CSV.
+- **NetworkX + SciPy + NumPy:** directed features, PageRank and Louvain communities. SciPy is needed by NetworkX's PageRank implementation.
 
-Only dependencies justified by the actual starter kit and implementation will be added.
+No LLM, API key, paid service or GPU is needed.
+
+## Install and run
+
+From the repository root:
+
+```text
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python run_pipeline.py
+.venv\Scripts\python viewer.py
+```
+
+On macOS/Linux replace `.venv\Scripts\python` with `.venv/bin/python`. Open `http://127.0.0.1:8765/` and enter any `gid` from `nodes_roles.csv`. The viewer is local and read-only; its default output directory is `out/`. To use other paths, run `python run_pipeline.py --data PATH --out PATH` and pass the same options to `viewer.py`. No environment variables or personal accounts are required.
+
+Run checks:
+
+```text
+.venv\Scripts\python -m unittest discover -s tests -v
+```
+
+## Role rules and explanation
+
+The pipeline calculates visible in/out degrees, KZT totals, transaction counts, weighted PageRank, seed reach, depth and `out_kzt / in_kzt`. Only observed transfers are described. Role cutoffs are derived from the input distribution and printed at each run. For the supplied dataset, the measured cutoffs are: fan-in ≥3, fan-out ≥8, incoming KZT ≥166,819.7, outgoing KZT ≥397,500, PageRank ≥0.00180444, and minimum two-sided flow ≥43,500 KZT.
+
+| Role | Deterministic candidate rule |
+| --- | --- |
+| `consolidator` | Fan-in at/above the 90th percentile of positive in-degrees (minimum 3) **and** visible incoming sum at/above the 75th percentile. A seed's role score is capped because its incoming flow is incomplete. |
+| `distributor` | Fan-out at/above the 90th percentile of positive out-degrees (minimum 3) **and** visible outgoing sum at/above the 75th percentile. |
+| `transit` | Non-seed with visible input and output, minimum of those amounts at/above the median two-sided flow, and `out_kzt / in_kzt` in `[0.8, 1.2]`. |
+| `terminal` | Non-seed at depth below 4, with a visible incoming edge and no visible outgoing edge. This is only a possible endpoint *within the export*. |
+| `coordinator` | At least two incoming and two outgoing counterparties, reachable from at least two seeds, and PageRank at/above its 98th percentile. This indicates structural importance, not an identified organizer. |
+| `peripheral` | No stronger candidate; depth-4 truncated nodes with no outgoing edge stay here rather than becoming `terminal`. |
+
+When multiple rules match, the strongest bounded role signal wins with a fixed tie order. `role_score` is the strength of visible evidence, **not a calibrated probability**. Every row includes numbers in `evidence`. The score and evidence do not imply guilt.
+
+Louvain partitions an undirected projection using log-scaled transfer weights and a fixed seed. Direction is retained in role features, internal cluster sums, and the viewer. Cluster IDs are ordered by their smallest `gid`. The cluster `hypothesis` is generated from observed size, seed count and internal volume; it is not a criminal allegation.
+
+`priority_score` aggregates equal-weight percentile ranks of role signal, counterparties, visible volume and structural position/seed reach; the final score is ranked to `[0,1]`. Depth-4 truncated endpoints receive a reduction because downstream activity is unknown. Ties use ascending `gid`. `top_nodes.csv` includes concrete values in `why`. Equal weights are a transparent starting assumption, not domain-calibrated risk weights.
+
+## Scalability
+
+The supplied 2,248-node graph runs locally in seconds. At about one million nodes, NetworkX object overhead, PageRank, Louvain and rendering would need replacement with chunked Parquet processing, a compact graph engine such as igraph, and indexed neighborhood queries. The current viewer intentionally draws at most 16 edges in each direction for a selected node while reporting full counts.
 
 ## Definition of Done
 
-- [ ] One README command runs from the raw Parquet files to all three CSVs in under five minutes, with no manual steps.
-- [ ] `nodes_roles.csv` has exactly 2,248 unique `gid` values, required fields, one valid role per node, bounded scores and nonempty evidence.
-- [ ] Formal metrics, criteria and thresholds for all roles are documented; the team can explain the roles of three arbitrary `gid` values within one minute using those metrics.
-- [ ] Every node has a consistent `cluster_id`; `clusters.csv` reports cluster size, seed count, internal volume, top nodes and a hypothesis.
-- [ ] `top_nodes.csv` contains at least 20 deterministically ranked nodes with reasons.
-- [ ] The viewer shows directed edges, roles and clusters; an arbitrary jury-provided `gid` can be found and its links inspected.
-- [ ] README documents startup, outputs, limitations, role criteria, thresholds and how the approach would change at approximately one million nodes; a one-slide pipeline diagram and a five-minute live demo are ready.
+- [x] One command runs from raw Parquet to three validated CSVs in under five minutes (measured 3.95 seconds on the development machine).
+- [x] `nodes_roles.csv` covers exactly 2,248 unique `gid` values with required fields, valid roles, bounded scores and evidence.
+- [x] All six role rules and measured thresholds are documented; numerical evidence is available for arbitrary nodes.
+- [x] Every node has a cluster; `clusters.csv` reports size, seed count, internal volume, top nodes and a cautious hypothesis.
+- [x] `top_nodes.csv` contains 20 deterministically ranked nodes with reasons.
+- [x] The local viewer finds arbitrary `gid` values and shows directed incoming/outgoing links, roles and clusters.
+- [x] A one-page pipeline diagram is available in `ARCHITECTURE.md`.
+- [ ] A timed five-minute team demo remains to be rehearsed.
 
 ## Development status
 
-The official team repository is initialized and the Money Graph requirements have been analyzed. **Implementation and testing have not started.** The organizer's starter kit and dataset are not in this repository yet; they must be inspected before implementation choices are finalized. There is currently no runnable pipeline or viewer.
+The first deterministic pipeline and local viewer are implemented. On the provided data, the pipeline produced 2,248 role rows, 66 clusters and 20 top rows in 3.95 seconds. Three unittest cases passed, including deterministic reruns, depth-4 protection and arbitrary-`gid` viewer rendering; one HTTP request to the viewer returned status 200. These checks establish basic operation, not expert validation of AML role quality.
+
+## Sources and attribution
+
+- `data/` and `data/README.md`: anonymized HackAlem AI organizer dataset, supplied for this competition.
+- `starter/`: organizer-provided starter code and instructions. It loads Parquet, builds a directed graph and calculates baseline metrics; its CSV role/cluster/priority values are placeholders. This project's `run_pipeline.py`, role rules, validation and viewer were developed during the competition.
+- Python dependencies and exact installed versions are listed in `requirements.txt`; their respective open-source licenses apply.
