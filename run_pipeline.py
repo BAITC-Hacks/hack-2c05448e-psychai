@@ -200,6 +200,29 @@ def rank_nodes(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def cluster_hypothesis(group: pd.DataFrame, internal_kzt: float) -> str:
+    """Describe observed role composition without asserting a common criminal purpose."""
+    counts = group.role.value_counts()
+    collectors = int(counts.get("consolidator", 0))
+    distributors = int(counts.get("distributor", 0))
+    transits = int(counts.get("transit", 0))
+    coordinators = int(counts.get("coordinator", 0))
+    if collectors and distributors:
+        pattern = f"Признаки сбора и распределения: {collectors} сборщиков, {distributors} распределителей."
+    elif collectors:
+        pattern = f"Признаки сбора средств: {collectors} узлов консолидации."
+    elif distributors:
+        pattern = f"Признаки распределения: {distributors} узлов с веерной рассылкой."
+    elif transits:
+        pattern = f"Возможный транзитный участок: {transits} узлов с признаками транзита."
+    elif coordinators:
+        pattern = f"Структурный центр: {coordinators} узлов со связями с несколькими seed."
+    else:
+        pattern = "Назначение группы по видимым переводам не установлено."
+    return (f"{pattern} В группе {len(group)} узлов и {int(group.is_seed.sum())} seed; "
+            f"видимый внутренний оборот {internal_kzt:,.0f} KZT. Требуется проверка аналитиком.")
+
+
 def outputs(df: pd.DataFrame, edges: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     roles = df[NODE_COLUMNS + ["depth", "is_seed", "in_deg", "out_deg", "in_kzt", "out_kzt",
                                "in_tx", "out_tx", "pagerank", "seed_reach", "pass_through",
@@ -214,7 +237,7 @@ def outputs(df: pd.DataFrame, edges: pd.DataFrame) -> tuple[pd.DataFrame, pd.Dat
             "cluster_id": int(cid), "n_nodes": len(group), "n_seed": int(group.is_seed.sum()),
             "sum_kzt_internal": round(float(internal.get(cid, 0)), 2),
             "top_gids": ";".join(str(gid) for gid in leaders.gid),
-            "hypothesis": f"Группа для проверки: {len(group)} узлов, {int(group.is_seed.sum())} seed; видимый внутренний оборот {internal.get(cid, 0):,.0f} KZT.",
+            "hypothesis": cluster_hypothesis(group, float(internal.get(cid, 0))),
         })
     cluster_frame = pd.DataFrame(clusters, columns=CLUSTER_COLUMNS)
     top = df.sort_values(["priority_score", "gid"], ascending=[False, True]).head(20).copy()

@@ -100,6 +100,8 @@ class FullDatasetTests(unittest.TestCase):
             top = pd.read_csv(Path(first) / "top_nodes.csv")
             nodes, edges, _ = load_and_validate(ROOT / "data")
             validate_outputs(roles, clusters, top, nodes)
+            self.assertTrue(clusters.hypothesis.str.contains("Требуется проверка аналитиком").all())
+            self.assertTrue(clusters.hypothesis.str.contains("Признаки|Возможный|Структурный|Назначение").all())
             self.assertFalse(((roles.depth == 4) & (roles.role == "terminal")).any())
             arbitrary_gid = int(nodes.iloc[-1].gid)
             rendered = page(arbitrary_gid, roles.set_index("gid", drop=False), edges, clusters, top)
@@ -108,6 +110,7 @@ class FullDatasetTests(unittest.TestCase):
             self.assertIn('type="text" inputmode="numeric"', rendered)
             self.assertIn("Почему выбрана эта роль", rendered)
             self.assertIn("Группа связей №", rendered)
+            self.assertIn("Гипотеза о группе", rendered)
             self.assertIn("Как читать схему и термины", rendered)
             self.assertIn("Почему в топе", rendered)
 
