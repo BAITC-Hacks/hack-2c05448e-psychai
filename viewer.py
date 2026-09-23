@@ -45,50 +45,69 @@ def load_view(data_dir: Path, out_dir: Path):
 def svg_for(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame) -> str:
     incoming = edges.loc[edges.dst == gid].sort_values(["sum_kzt", "src"], ascending=[False, True])
     outgoing = edges.loc[edges.src == gid].sort_values(["sum_kzt", "dst"], ascending=[False, True])
-    # Full neighbor counts remain visible in text. Limit plotted edges only to
-    # keep a 2,248-node network legible on an ordinary laptop.
+    # Preserve full counts in the headings; show the 16 largest links on each
+    # side so every displayed counterparty gets its own readable amount row.
     left = list(incoming.head(16).itertuples(index=False))
     right = list(outgoing.head(16).itertuples(index=False))
     max_kzt = max((float(row.sum_kzt) for row in left + right), default=1.0)
-    height = max(340, 95 + 44 * max(len(left), len(right)))
+    height = max(320, 110 + 54 * max(len(left), len(right)))
     center_y = height / 2
     parts = [
-        f'<svg viewBox="0 0 1000 {height}" role="img" aria-label="Направленные связи узла {gid}">',
+        f'<svg viewBox="0 0 1240 {height}" role="img" aria-label="Направленные связи узла {gid}">',
         '<defs><marker id="arrow" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">'
-        '<polygon points="0 0,9 3.5,0 7" fill="#64748b"/></marker></defs>',
-        f'<text x="80" y="35" fill="#334155">Входящие: {len(incoming)}</text>',
-        f'<text x="735" y="35" fill="#334155">Исходящие: {len(outgoing)}</text>',
+        '<polygon points="0 0,9 3.5,0 7" fill="#475569"/></marker></defs>',
+        f'<text x="25" y="35" font-size="17" font-weight="700" fill="#334155">'
+        f'Отправители · {len(incoming)}</text>',
+        f'<text x="800" y="35" font-size="17" font-weight="700" fill="#334155">'
+        f'Получатели · {len(outgoing)}</text>',
     ]
-    def node(x: int, y: float, value: int, radius: int = 17) -> None:
+
+    def neighbor(index: int, row, side: str) -> None:
+        value = int(row.src if side == "left" else row.dst)
+        y = 75 + index * 54
         role = str(nodes.loc[value, "role"]) if value in nodes.index else "peripheral"
         color = COLORS.get(role, COLORS["peripheral"])
         same_cluster = value in nodes.index and nodes.loc[value, "cluster_id"] == nodes.loc[gid, "cluster_id"]
-        outline = "#eab308" if same_cluster else "#cbd5e1"
-        parts.append(f'<a href="/?gid={value}"><circle cx="{x}" cy="{y:.1f}" r="{radius}" '
-                     f'fill="{color}" stroke="{outline}" stroke-width="4">'
-                     f'<title>gid {value}: {html.escape(role)}</title></circle></a>')
-        label_x = 28 if x < 300 else (845 if x > 700 else x)
-        label_y = y + 4 if x != 500 else y + 48
-        anchor = "middle" if x == 500 else "start"
-        parts.append(f'<text x="{label_x}" y="{label_y:.1f}" text-anchor="{anchor}" '
-                     f'font-size="11" fill="#172033">{value}</text>')
+        outline = "#b45309" if same_cluster else "#cbd5e1"
+        outline_width = 7 if same_cluster else 3
+        width = 1.5 + 4 * (float(row.sum_kzt) / max_kzt) ** 0.5
+        hit_x = 16 if side == "left" else 790
+        hit_width = 570 if side == "left" else 435
+        node_x = 230 if side == "left" else 1020
+        gid_x = 25 if side == "left" else 1050
+        amount_x = 263 if side == "left" else 797
+        connector = (f'M 252 {y} H 263' if side == "left" else
+                     f'M 655 {center_y:.1f} L 797 {y}')
+        arrow_path = (f'M 443 {y} L 585 {center_y:.1f}' if side == "left" else
+                      f'M 977 {y} H 992')
+        parts.append(f'<a class="edge" href="/?gid={value}#node" aria-label="gid {value}, '
+                     f'{row.sum_kzt:,.0f} KZT"><title>gid {value}: '
+                     f'{html.escape(ROLE_INFO.get(role, ROLE_INFO["peripheral"])[0])}, '
+                     f'{row.sum_kzt:,.0f} KZT</title>')
+        parts.append(f'<rect class="edge-hit" x="{hit_x}" y="{y - 24}" width="{hit_width}" '
+                     'height="48" rx="8"/>')
+        parts.append(f'<path class="edge-path" d="{connector}" fill="none" stroke="#64748b" '
+                     f'stroke-width="{width:.1f}"/>')
+        parts.append(f'<path class="edge-path" d="{arrow_path}" fill="none" stroke="#64748b" '
+                     f'stroke-width="{width:.1f}" marker-end="url(#arrow)"/>')
+        parts.append(f'<rect class="amount-pill" x="{amount_x}" y="{y - 17}" width="180" height="34" rx="8"/>')
+        parts.append(f'<text class="amount-text" x="{amount_x + 90}" y="{y + 5}" text-anchor="middle">'
+                     f'{row.sum_kzt:,.0f} KZT</text>')
+        parts.append(f'<circle cx="{node_x}" cy="{y}" r="18" fill="{color}" '
+                     f'stroke="{outline}" stroke-width="{outline_width}"/>')
+        parts.append(f'<text class="gid-label" x="{gid_x}" y="{y + 5}">{value}</text></a>')
+
     for index, row in enumerate(left):
-        y = 70 + index * 44
-        width = 1.5 + 4 * (float(row.sum_kzt) / max_kzt) ** 0.5
-        parts.append(f'<line x1="210" y1="{y}" x2="472" y2="{center_y:.1f}" stroke="#64748b" '
-                     f'stroke-width="{width:.1f}" marker-end="url(#arrow)"/>')
-        parts.append(f'<text x="285" y="{(y + center_y) / 2 - 5:.1f}" font-size="11" fill="#475569">'
-                     f'{row.sum_kzt:,.0f} KZT</text>')
-        node(175, y, int(row.src))
+        neighbor(index, row, "left")
     for index, row in enumerate(right):
-        y = 70 + index * 44
-        width = 1.5 + 4 * (float(row.sum_kzt) / max_kzt) ** 0.5
-        parts.append(f'<line x1="528" y1="{center_y:.1f}" x2="790" y2="{y}" stroke="#64748b" '
-                     f'stroke-width="{width:.1f}" marker-end="url(#arrow)"/>')
-        parts.append(f'<text x="650" y="{(y + center_y) / 2 - 5:.1f}" font-size="11" fill="#475569">'
-                     f'{row.sum_kzt:,.0f} KZT</text>')
-        node(825, y, int(row.dst))
-    node(500, center_y, gid, 28)
+        neighbor(index, row, "right")
+    selected_color = COLORS.get(str(nodes.loc[gid, "role"]), COLORS["peripheral"])
+    parts.append(f'<circle cx="620" cy="{center_y:.1f}" r="34" fill="{selected_color}" '
+                 'stroke="#b45309" stroke-width="8"/>')
+    parts.append(f'<rect x="455" y="{center_y + 39:.1f}" width="330" height="34" rx="8" '
+                 'fill="#fff" stroke="#b7c9df" stroke-width="1.5"/>')
+    parts.append(f'<text x="620" y="{center_y + 63:.1f}" text-anchor="middle" '
+                 f'font-size="16" font-weight="700" fill="#172033">Выбранный gid {gid}</text>')
     parts.append("</svg>")
     return "".join(parts)
 
@@ -147,7 +166,8 @@ def page(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame, clusters: pd.DataFr
                 'Группа выделена по связям графа; общая цель её участников неизвестна.</p>'
                 f'<p><strong>Гипотеза о группе:</strong> {html.escape(str(cluster.hypothesis))}</p></div>'
                 '<h3>Куда идут стрелки</h3><p>Слева — клиенты, от которых получены переводы. '
-                'Справа — клиенты, которым отправлены переводы. Нажмите на круг, чтобы перейти к этому клиенту. '
+                'Справа — клиенты, которым отправлены переводы. Каждая строка связывает кружок, gid, сумму и стрелку; '
+                'наведите на строку, чтобы подсветить её, или нажмите, чтобы перейти к клиенту. '
                 'Толщина стрелки отражает сумму видимых переводов по этой связи. '
                 'Показаны до 16 крупнейших рёбер в каждом направлении; счётчики выше учитывают все связи.</p>'
                 f'<div class="graph">{svg_for(gid, nodes, edges)}</div></section>')
@@ -251,7 +271,12 @@ button:hover{{background:#173fae}}:focus-visible{{outline:3px solid #f59e0b;outl
 .incoming{{background:#2563eb}}.outgoing{{background:#ea580c}}.microcopy{{font-size:.85rem;margin:.25rem 0 1rem}}
 .evidence,.cluster{{background:#eef4fa;padding:1rem;border-radius:10px}}.scores{{display:flex;gap:.8rem;flex-wrap:wrap}}
 .scores p{{flex:1;min-width:240px;background:#f6f9fd;padding:1rem;border-radius:10px;margin:.2rem 0 1rem}}
-.graph svg{{width:100%;min-width:680px;border:1px solid #d8e0eb;background:#fbfdff;border-radius:10px}}
+.graph svg{{width:100%;min-width:1080px;border:1px solid #d8e0eb;background:#fbfdff;border-radius:10px}}
+.edge{{cursor:pointer}}.edge-hit{{fill:transparent}}.edge:hover .edge-hit,.edge:focus .edge-hit{{fill:#eaf3ff}}
+.edge:hover .edge-path,.edge:focus .edge-path{{stroke:#1d4ed8}}
+.amount-pill{{fill:#fff;stroke:#b7c9df;stroke-width:1.5}}
+.edge:hover .amount-pill,.edge:focus .amount-pill{{fill:#dceafe;stroke:#2563eb;stroke-width:2}}
+.amount-text{{font:700 14px system-ui;fill:#17304d}}.gid-label{{font:600 13px system-ui;fill:#172033}}
 .legend{{display:flex;gap:.8rem;flex-wrap:wrap}}small{{color:#52647c}}
 @media(max-width:850px){{.dashboard-grid{{grid-template-columns:1fr}}.stats{{grid-template-columns:repeat(2,minmax(0,1fr))}}}}
 @media(max-width:560px){{main{{padding:.7rem}}.hero{{padding:1.2rem}}.card{{padding:1rem}}.flow-panel{{grid-template-columns:1fr}}}}
@@ -268,7 +293,7 @@ button:hover{{background:#173fae}}:focus-visible{{outline:3px solid #f59e0b;outl
 <p><small>Можно скопировать gid из таблицы ниже или из nodes_roles.csv. Длинный номер не округляется.</small></p></section>
 {body}
 <section class="card"><h2>Как читать схему и термины</h2><p class="legend">{legend}</p>
-<p><strong>Стрелка</strong> показывает направление перевода. <strong>Жёлтая обводка</strong> означает,
+<p><strong>Стрелка</strong> показывает направление перевода. <strong>Тёмно-жёлтая толстая обводка</strong> означает,
 что сосед находится в той же группе связей, что и выбранный клиент.</p>
 <p><strong>Группа (кластер)</strong> — узлы, которые алгоритм объединил по связям; это не доказательство общей организации.
 <strong>Исходные клиенты (seed)</strong> — 81 клиент, с которых начался обход графа.</p></section>

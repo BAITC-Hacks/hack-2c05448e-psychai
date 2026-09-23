@@ -18,7 +18,7 @@ from run_pipeline import (
     build_graph, classify, cluster_graph, features, load_and_validate,
     outputs, rank_nodes, run, validate_outputs,
 )
-from viewer import page, serve
+from viewer import page, serve, svg_for
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -174,6 +174,12 @@ class FullDatasetTests(unittest.TestCase):
             self.assertIn('class="flow-panel"', rendered)
             self.assertIn("Толщина стрелки отражает сумму", rendered)
             self.assertIn('href="#top"', rendered)
+            top_gid = int(top.iloc[0].gid)
+            top_svg = svg_for(top_gid, roles.set_index("gid", drop=False), edges)
+            displayed_links = min(16, int((edges.dst == top_gid).sum())) + min(16, int((edges.src == top_gid).sum()))
+            self.assertEqual(top_svg.count('class="amount-pill"'), displayed_links)
+            self.assertEqual(top_svg.count('class="edge-hit"'), displayed_links)
+            self.assertIn('stroke="#b45309" stroke-width="8"', top_svg)
 
 
 if __name__ == "__main__":
