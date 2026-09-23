@@ -118,6 +118,11 @@ class FullDatasetTests(unittest.TestCase):
             self.assertIn("Гипотеза о группе", rendered)
             self.assertIn("Как читать схему и термины", rendered)
             self.assertIn("Почему в топе", rendered)
+            self.assertIn("Обзор видимой сети", rendered)
+            self.assertIn("Роли в этой выгрузке", rendered)
+            self.assertIn("Группы с крупнейшим внутренним оборотом", rendered)
+            self.assertIn(f">{int(roles.is_seed.sum())}</strong><span>исходных клиентов", rendered)
+            self.assertIn("Это не баланс группы и не рейтинг угроз", rendered)
 
 
 if __name__ == "__main__":

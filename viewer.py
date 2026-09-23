@@ -140,6 +140,41 @@ def page(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame, clusters: pd.DataFr
         f'<span><span class="dot" style="background:{color}"></span>{html.escape(ROLE_INFO[role][0])}</span>'
         for role, color in COLORS.items()
     )
+    role_counts = nodes.role.value_counts()
+    role_bars = "".join(
+        f'<div class="role-row"><span><span class="dot" style="background:{color}"></span>'
+        f'{html.escape(ROLE_INFO[role][0])}</span><div class="bar-track">'
+        f'<div class="bar-fill" style="width:{100 * int(role_counts.get(role, 0)) / len(nodes):.1f}%;'
+        f'background:{color}"></div></div><strong>{int(role_counts.get(role, 0))}</strong></div>'
+        for role, color in COLORS.items()
+    )
+    # Turnover is a descriptive sort key, not a fraud score. Each transfer is
+    # counted once in the source cluster's internal edges.
+    largest_clusters = clusters.sort_values(
+        ["sum_kzt_internal", "cluster_id"], ascending=[False, True]
+    ).head(5)
+    cluster_rows = "".join(
+        f'<tr><td>{int(r.cluster_id)}</td><td>{int(r.n_nodes)}</td><td>{int(r.n_seed)}</td>'
+        f'<td>{r.sum_kzt_internal:,.0f} KZT</td><td>'
+        f'<a href="/?gid={int(str(r.top_gids).split(";")[0])}#node">Открыть участника</a></td></tr>'
+        for r in largest_clusters.itertuples(index=False)
+    )
+    summary = (
+        f'<section class="card" id="overview"><h2>Обзор видимой сети</h2>'
+        '<p>Это объём загруженных данных и результаты группировки, а не оценка опасности людей.</p>'
+        '<div class="stats">'
+        f'<div><strong>{len(nodes):,}</strong><span>клиентов</span></div>'
+        f'<div><strong>{len(edges):,}</strong><span>направленных связей</span></div>'
+        f'<div><strong>{int(nodes.is_seed.sum()):,}</strong><span>исходных клиентов</span></div>'
+        f'<div><strong>{len(clusters):,}</strong><span>групп связей</span></div>'
+        '</div><div class="dashboard-grid"><div><h3>Роли в этой выгрузке</h3>'
+        '<p>Каждый клиент отнесён к одной роли по наблюдаемым признакам.</p>'
+        f'{role_bars}</div><div><h3>Группы с крупнейшим внутренним оборотом</h3>'
+        '<p>Сумма видимых переводов между участниками группы. Это не баланс группы и не рейтинг угроз.</p>'
+        '<div class="table-wrap"><table><thead><tr><th>Группа</th><th>Клиенты</th>'
+        '<th>Исходные</th><th>Оборот</th><th></th></tr></thead>'
+        f'<tbody>{cluster_rows}</tbody></table></div></div></div></section>'
+    )
     return f"""<!doctype html><html lang="ru"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Граф денег — разбор сети</title>
 <style>body{{font:16px/1.5 system-ui;margin:0;background:#f3f6fb;color:#172033}}
@@ -153,12 +188,20 @@ input{{width:22ch;max-width:100%}}button{{background:#1d4ed8;color:white;border:
 table{{border-collapse:collapse;width:100%}}th,td{{border-bottom:1px solid #d8e0eb;padding:.5rem;text-align:left;vertical-align:top}}
 th{{font-weight:600}}.table-wrap,.graph{{overflow-x:auto}}svg{{width:100%;min-width:680px;border:1px solid #d8e0eb}}
 .dot{{display:inline-block;width:.8em;height:.8em;border-radius:50%;margin-right:.35em}}.legend{{display:flex;gap:.8rem;flex-wrap:wrap}}
+.stats{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.7rem}}
+.stats div{{background:#eef4fa;border-radius:8px;padding:.8rem;display:flex;flex-direction:column}}
+.stats strong{{font-size:1.6rem;font-variant-numeric:tabular-nums}}.stats span{{color:#52647c}}
+.dashboard-grid{{display:grid;grid-template-columns:minmax(240px,1fr) minmax(0,2fr);gap:1.5rem}}
+.role-row{{display:grid;grid-template-columns:165px 1fr 35px;gap:.5rem;align-items:center;margin:.45rem 0}}
+.role-row strong{{text-align:right}}.bar-track{{height:.75rem;background:#e8edf5;border-radius:10px;overflow:hidden}}
+.bar-fill{{height:100%;border-radius:10px}}@media(max-width:780px){{.dashboard-grid{{grid-template-columns:1fr}}}}
 a{{color:#1d4ed8}}small{{color:#52647c}}.role{{font-size:1.25rem}}</style>
 <main><h1>Граф денег</h1><p>{len(nodes)} клиента · {len(edges)} направленных связей · {len(clusters)} групп</p>
 <section class="card intro"><h2>Что показывает этот экран</h2>
 <p>Это карта <strong>видимой части</strong> переводов. Выберите клиента по номеру gid, чтобы увидеть,
 от кого ему поступали деньги, кому он отправлял их дальше и почему программа предложила его роль.
 Результат — подсказка для проверки аналитиком, а не обвинение.</p></section>
+{summary}
 <section class="card"><form method="get"><label for="gid"><strong>Номер клиента (gid)</strong></label>
 <input id="gid" name="gid" type="text" inputmode="numeric" pattern="[0-9]+" value="{gid}" required>
 <button type="submit">Показать</button></form>
