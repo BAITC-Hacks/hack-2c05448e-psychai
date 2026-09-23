@@ -106,6 +106,10 @@ class FullDatasetTests(unittest.TestCase):
             self.assertIn(f"gid {arbitrary_gid}", rendered)
             self.assertIn("<svg", rendered)
             self.assertIn('type="text" inputmode="numeric"', rendered)
+            self.assertIn("Почему выбрана эта роль", rendered)
+            self.assertIn("Группа связей №", rendered)
+            self.assertIn("Как читать схему и термины", rendered)
+            self.assertIn("Почему в топе", rendered)
 
 
 if __name__ == "__main__":

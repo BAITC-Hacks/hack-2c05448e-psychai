@@ -19,6 +19,15 @@ COLORS = {
     "peripheral": "#64748b",
 }
 
+ROLE_INFO = {
+    "consolidator": ("Сбор средств", "Получает переводы от нескольких разных клиентов; это повод проверить источник и дальнейший путь средств."),
+    "transit": ("Возможный транзит", "Видимые вход и выход близки по сумме, а часть выхода произошла в более поздние дни. Это не доказывает движение тех же денег."),
+    "distributor": ("Распределение", "Отправляет средства многим разным получателям; стоит проверить, куда ведут эти ветви."),
+    "terminal": ("Видимый конечный получатель", "Получает переводы и не имеет исходящих связей внутри этой выгрузки. Вне выгрузки переводы возможны."),
+    "coordinator": ("Структурный центр", "Связан с несколькими потоками и исходными клиентами. Это кандидат для углублённой проверки, а не установленный организатор."),
+    "peripheral": ("Недостаточно признаков", "По доступной части графа ни одна более конкретная роль не обоснована."),
+}
+
 
 def load_view(data_dir: Path, out_dir: Path):
     nodes = pd.read_csv(out_dir / "nodes_roles.csv").set_index("gid", drop=False)
@@ -81,45 +90,90 @@ def svg_for(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame) -> str:
 def page(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame, clusters: pd.DataFrame,
          top: pd.DataFrame) -> str:
     if gid not in nodes.index:
-        body = f"<p>gid {gid} отсутствует в данных. Введите gid из nodes_roles.csv.</p>"
+        body = f'<section class="card"><h2>Узел не найден</h2><p>gid {gid} отсутствует в данных. Скопируйте идентификатор из nodes_roles.csv или выберите строку топ-20 ниже.</p></section>'
     else:
         row = nodes.loc[gid]
+        role_name, role_meaning = ROLE_INFO[str(row.role)]
+        cluster = clusters.loc[clusters.cluster_id == row.cluster_id].iloc[0]
         details = [
-            ("Роль", row.role), ("Сила ролевого сигнала", f"{row.role_score:.3f}"),
-            ("Приоритет", f"{row.priority_score:.3f}"), ("Кластер", int(row.cluster_id)),
-            ("Входящие связи", int(row.in_deg)), ("Исходящие связи", int(row.out_deg)),
-            ("Видимый вход, KZT", f"{row.in_kzt:,.0f}"),
-            ("Видимый выход, KZT", f"{row.out_kzt:,.0f}"),
-            ("Входящих переводов", int(row.in_tx)), ("Исходящих переводов", int(row.out_tx)),
-            ("Достижим от seed", int(row.seed_reach)), ("Глубина", int(row.depth)),
+            ("От скольких клиентов получал", int(row.in_deg)),
+            ("Скольким клиентам отправлял", int(row.out_deg)),
+            ("Видимая сумма полученных переводов", f"{row.in_kzt:,.0f} KZT"),
+            ("Видимая сумма отправленных переводов", f"{row.out_kzt:,.0f} KZT"),
+            ("Количество входящих / исходящих переводов", f"{int(row.in_tx)} / {int(row.out_tx)}"),
+            ("Сколько исходных клиентов могут достичь узла", int(row.seed_reach)),
+            ("Глубина от исходных клиентов", int(row.depth)),
         ]
         cells = "".join(f"<tr><th>{html.escape(str(label))}</th><td>{html.escape(str(value))}</td></tr>"
                         for label, value in details)
-        body = (f'<h2>gid {gid}</h2><p class="note">{html.escape(str(row.evidence))}</p>'
-                f'<table>{cells}</table><h3>Направленные связи</h3>'
-                '<p>Показаны до 16 крупнейших входящих и исходящих рёбер; числа в таблице учитывают все рёбра.</p>'
-                f'{svg_for(gid, nodes, edges)}')
-    links = " · ".join(f'<a href="/?gid={int(r.gid)}">{int(r.gid)} ({r.priority_score:.3f})</a>'
-                       for r in top.head(20).itertuples(index=False))
-    legend = " · ".join(f'<span style="color:{color}">● {html.escape(role)}</span>'
-                        for role, color in COLORS.items())
+        temporal = (f'<p><strong>Временная опора:</strong> после видимых входящих переводов в более поздние дни '
+                    f'могло уйти до {row.temporal_support_kzt:,.0f} KZT. Переводы в один день не учитываются: '
+                    'их порядок неизвестен.</p>' if row.role == "transit" else "")
+        depth_note = ('<p class="caution">Узел на четвёртом колене: обход здесь заканчивается. '
+                      'Отсутствие исходящих стрелок не означает, что переводов дальше не было.</p>'
+                      if bool(row.truncated_by_depth) else "")
+        body = (f'<section class="card" id="node"><h2>Клиент gid {gid}</h2>'
+                f'<p class="role"><span class="dot" style="background:{COLORS[str(row.role)]}"></span>'
+                f'<strong>{html.escape(role_name)}</strong> <small>({html.escape(str(row.role))})</small></p>'
+                f'<p>{html.escape(role_meaning)}</p>'
+                f'<p class="evidence"><strong>Почему выбрана эта роль:</strong> {html.escape(str(row.evidence))}</p>'
+                f'<div class="scores"><p><strong>Сила признаков роли: {row.role_score:.3f}</strong><br>'
+                'Насколько явно проявились признаки выбранной роли. Это не вероятность преступления.</p>'
+                f'<p><strong>Очередность проверки: {row.priority_score:.3f}</strong><br>'
+                'Чем выше число, тем раньше мы предлагаем аналитику посмотреть узел. Это не оценка виновности.</p></div>'
+                f'{temporal}{depth_note}<h3>Наблюдаемые данные</h3><table>{cells}</table>'
+                f'<div class="cluster"><h3>Группа связей № {int(row.cluster_id)}</h3>'
+                f'<p>В этой группе {int(cluster.n_nodes)} клиентов, из них {int(cluster.n_seed)} исходных. '
+                f'Сумма переводов между клиентами группы: {cluster.sum_kzt_internal:,.0f} KZT. '
+                'Группа выделена по связям графа; общая цель её участников неизвестна.</p></div>'
+                '<h3>Куда идут стрелки</h3><p>Слева — клиенты, от которых получены переводы. '
+                'Справа — клиенты, которым отправлены переводы. Нажмите на круг, чтобы перейти к этому клиенту. '
+                'Показаны до 16 крупнейших рёбер в каждом направлении; счётчики выше учитывают все связи.</p>'
+                f'<div class="graph">{svg_for(gid, nodes, edges)}</div></section>')
+    top_rows = "".join(
+        f'<tr><td>{int(r.rank)}</td><td><a href="/?gid={int(r.gid)}">{int(r.gid)}</a></td>'
+        f'<td>{html.escape(ROLE_INFO[str(r.role)][0])}</td><td>{r.priority_score:.3f}</td>'
+        f'<td>{html.escape(str(r.why))}</td></tr>' for r in top.head(20).itertuples(index=False)
+    )
+    legend = " · ".join(
+        f'<span><span class="dot" style="background:{color}"></span>{html.escape(ROLE_INFO[role][0])}</span>'
+        for role, color in COLORS.items()
+    )
     return f"""<!doctype html><html lang="ru"><meta charset="utf-8">
-<title>Граф денег — просмотр узла</title>
-<style>body{{font:15px system-ui;margin:2rem auto;max-width:1050px;color:#172033}}
-h1{{margin-bottom:.2rem}}form{{margin:1.2rem 0}}input{{font:inherit;padding:.45rem}}
-button{{font:inherit;padding:.45rem .8rem}}table{{border-collapse:collapse;margin:1rem 0}}
-th,td{{border:1px solid #d8e0eb;padding:.45rem .7rem;text-align:left}}
-.note{{background:#eef4fa;padding:.8rem;border-radius:.35rem}}svg{{width:100%;border:1px solid #d8e0eb}}
-a{{color:#1d4ed8}}</style>
-<h1>Граф денег</h1><p>Локальная схема направленных переводов · {len(nodes)} узлов ·
-{len(edges)} рёбер · {len(clusters)} кластеров. Роли — гипотезы для проверки аналитиком.</p>
-<form method="get"><label for="gid">Поиск gid: </label>
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Граф денег — разбор сети</title>
+<style>body{{font:16px/1.5 system-ui;margin:0;background:#f3f6fb;color:#172033}}
+main{{max-width:1120px;margin:auto;padding:1.5rem}}h1{{margin:.2rem 0}}h2{{margin-top:0}}
+.card{{background:white;border:1px solid #d8e0eb;border-radius:12px;padding:1.2rem;margin:1rem 0}}
+.intro{{background:#e7f0ff}}.caution{{background:#fff5dc;border-left:4px solid #b45309;padding:.7rem}}
+.evidence,.cluster{{background:#eef4fa;padding:.8rem;border-radius:8px}}.scores{{display:flex;gap:1rem;flex-wrap:wrap}}
+.scores p{{flex:1;min-width:240px;background:#f7f9fd;padding:.8rem;border-radius:8px}}
+form{{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}}input,button{{font:inherit;padding:.5rem}}
+input{{width:22ch;max-width:100%}}button{{background:#1d4ed8;color:white;border:0;border-radius:6px;cursor:pointer}}
+table{{border-collapse:collapse;width:100%}}th,td{{border-bottom:1px solid #d8e0eb;padding:.5rem;text-align:left;vertical-align:top}}
+th{{font-weight:600}}.table-wrap,.graph{{overflow-x:auto}}svg{{width:100%;min-width:680px;border:1px solid #d8e0eb}}
+.dot{{display:inline-block;width:.8em;height:.8em;border-radius:50%;margin-right:.35em}}.legend{{display:flex;gap:.8rem;flex-wrap:wrap}}
+a{{color:#1d4ed8}}small{{color:#52647c}}.role{{font-size:1.25rem}}</style>
+<main><h1>Граф денег</h1><p>{len(nodes)} клиента · {len(edges)} направленных связей · {len(clusters)} групп</p>
+<section class="card intro"><h2>Что показывает этот экран</h2>
+<p>Это карта <strong>видимой части</strong> переводов. Выберите клиента по номеру gid, чтобы увидеть,
+от кого ему поступали деньги, кому он отправлял их дальше и почему программа предложила его роль.
+Результат — подсказка для проверки аналитиком, а не обвинение.</p></section>
+<section class="card"><form method="get"><label for="gid"><strong>Номер клиента (gid)</strong></label>
 <input id="gid" name="gid" type="text" inputmode="numeric" pattern="[0-9]+" value="{gid}" required>
 <button type="submit">Показать</button></form>
-<p>{legend} · <span style="color:#b45309">◉ жёлтая обводка: кластер выбранного узла</span></p>{body}
-<h3>Топ-20 для проверки</h3><p>{links}</p>
-<p>Видимые суммы не являются полным балансом. Узлы на глубине 4 обрезаны границей обхода;
-переводы ниже 5000 KZT отсутствуют.</p></html>"""
+<p><small>Можно скопировать gid из таблицы ниже или из nodes_roles.csv. Длинный номер не округляется.</small></p></section>
+{body}
+<section class="card"><h2>Как читать схему и термины</h2><p class="legend">{legend}</p>
+<p><strong>Стрелка</strong> показывает направление перевода. <strong>Жёлтая обводка</strong> означает,
+что сосед находится в той же группе связей, что и выбранный клиент.</p>
+<p><strong>Группа (кластер)</strong> — узлы, которые алгоритм объединил по связям; это не доказательство общей организации.
+<strong>Исходные клиенты (seed)</strong> — 81 клиент, с которых начался обход графа.</p></section>
+<section class="card" id="top"><h2>Кого посмотреть первым: топ-20</h2>
+<p>Это порядок ручной проверки. Нажмите на gid, чтобы открыть его связи. Балл сравнивает узлы внутри этой выгрузки и не является вероятностью преступления.</p>
+<div class="table-wrap"><table><thead><tr><th>№</th><th>gid</th><th>Роль</th><th>Приоритет</th><th>Почему в топе</th></tr></thead>
+<tbody>{top_rows}</tbody></table></div></section>
+<p class="caution">Данные неполные: обход обрывается на четвёртом колене, переводы меньше 5 000 KZT не видны,
+а суммы внутри графа не показывают полный баланс клиента.</p></main></html>"""
 
 
 def serve(data_dir: Path, out_dir: Path, host: str, port: int) -> None:
