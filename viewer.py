@@ -7,6 +7,7 @@ import html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+import webbrowser
 
 import pandas as pd
 
@@ -220,7 +221,8 @@ a{{color:#1d4ed8}}small{{color:#52647c}}.role{{font-size:1.25rem}}</style>
 а суммы внутри графа не показывают полный баланс клиента.</p></main></html>"""
 
 
-def serve(data_dir: Path, out_dir: Path, host: str, port: int) -> None:
+def serve(data_dir: Path, out_dir: Path, host: str, port: int,
+          open_browser: bool = True) -> None:
     nodes, edges, clusters, top = load_view(data_dir, out_dir)
     default_gid = int(top.iloc[0].gid)
     class Handler(BaseHTTPRequestHandler):
@@ -237,7 +239,17 @@ def serve(data_dir: Path, out_dir: Path, host: str, port: int) -> None:
             self.end_headers()
             self.wfile.write(content)
     with ThreadingHTTPServer((host, port), Handler) as server:
-        print(f"Viewer: http://{host}:{port}/?gid={default_gid}", flush=True)
+        browser_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+        if ":" in browser_host:
+            browser_host = f"[{browser_host}]"
+        url = f"http://{browser_host}:{server.server_port}/?gid={default_gid}"
+        print(f"Viewer: {url}", flush=True)
+        if open_browser:
+            try:
+                if not webbrowser.open(url, new=2):
+                    print("Browser did not open automatically; use the Viewer URL above.", flush=True)
+            except Exception as exc:
+                print(f"Browser could not open ({exc}); use the Viewer URL above.", flush=True)
         server.serve_forever()
 
 
@@ -247,5 +259,7 @@ if __name__ == "__main__":
     parser.add_argument("--out", type=Path, default=Path("out"))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--no-browser", action="store_true",
+                        help="Do not open a browser tab automatically")
     args = parser.parse_args()
-    serve(args.data, args.out, args.host, args.port)
+    serve(args.data, args.out, args.host, args.port, open_browser=not args.no_browser)

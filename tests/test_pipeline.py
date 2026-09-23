@@ -3,6 +3,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import networkx as nx
 import pandas as pd
@@ -11,7 +12,7 @@ from run_pipeline import (
     build_graph, classify, cluster_graph, features, load_and_validate,
     outputs, rank_nodes, run, validate_outputs,
 )
-from viewer import page
+from viewer import page, serve
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -86,6 +87,18 @@ class SyntheticGraphTests(unittest.TestCase):
 
 
 class FullDatasetTests(unittest.TestCase):
+    def test_viewer_opens_browser_by_default_and_supports_headless_mode(self):
+        if not (ROOT / "data" / "nodes.parquet").exists():
+            self.skipTest("Organizer dataset not present")
+        with patch("viewer.ThreadingHTTPServer") as server, patch("viewer.webbrowser.open", return_value=True) as browser:
+            server.return_value.__enter__.return_value.server_port = 8765
+            serve(ROOT / "data", ROOT / "submission", "127.0.0.1", 8765)
+            browser.assert_called_once()
+            self.assertTrue(browser.call_args.args[0].startswith("http://127.0.0.1:8765/?gid="))
+            browser.reset_mock()
+            serve(ROOT / "data", ROOT / "submission", "127.0.0.1", 8765, open_browser=False)
+            browser.assert_not_called()
+
     def test_dataset_pipeline_is_deterministic_and_viewer_accepts_arbitrary_gid(self):
         if not (ROOT / "data" / "nodes.parquet").exists():
             self.skipTest("Organizer dataset not present")
