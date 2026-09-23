@@ -1,166 +1,138 @@
-# Money Graph / Граф денег
+# Граф денег
 
-HackAlem AI case: **«Граф денег: восстановление финансовой структуры организованной группы по транзакционной сети»**.
+Решение кейса HackAlem AI «Граф денег: восстановление финансовой структуры организованной группы по транзакционной сети».
 
-## Problem
+## Задача и пользователь
 
-An AML analyst knows 81 seed clients connected to an investigation but must manually trace outgoing transfers to identify potential consolidation, transit and distribution points. The supplied four-hop transaction network contains 2,248 nodes. This prototype is intended to prioritize **further analyst review**, not to determine anyone's guilt.
+Аналитику нужно изучить сеть переводов вокруг 81 исходного клиента. Вручную проследить 2 248 участников и 3 119 направленных связей трудно. Проект рассчитывает наблюдаемые признаки, присваивает каждому клиенту **гипотезу о роли**, группирует клиентов и предлагает порядок дальнейшей проверки. Роль и приоритет не означают виновность и не являются вероятностью правонарушения.
 
-## Goal
+## Что реализовано
 
-Build a locally reproducible pipeline and graph viewer that assign an explainable primary role to every node, group nodes into clusters, and rank clients for analyst review. Outputs are three CSV files plus a viewer in which an analyst can search for an arbitrary `gid` and inspect directed links, role and evidence.
+- Проверка входных Parquet-файлов и согласованности отдельных транзакций с агрегированными рёбрами.
+- Направленный взвешенный граф со всеми 2 248 `gid`, включая изолированные исходные узлы.
+- Шесть объяснимых ролей: `consolidator`, `transit`, `distributor`, `terminal`, `coordinator`, `peripheral`. Для `transit` учитывается порядок переводов по календарным дням.
+- Кластеры Louvain, рейтинг узлов и числовые обоснования решений.
+- Три CSV-файла по схеме кейса и локальная страница для поиска любого `gid` с просмотром роли, кластера и направленных связей.
+- Автоматические проверки полного сценария, воспроизводимости результатов и ограничений данных.
 
-## Input
+## Основной сценарий и архитектура
 
-The organizer's dataset is included in `data/`. Its schema is documented in `data/README.md`:
+1. `run_pipeline.py` читает включённые в репозиторий `data/nodes.parquet`, `data/edges.parquet` и `data/transactions.parquet`.
+2. Программа проверяет схему, количество записей, идентификаторы и суммы рёбер. Затем она вычисляет степени узлов, видимые суммы, PageRank, достижимость от исходных клиентов и поддержку позднейших исходящих переводов.
+3. Детерминированные правила назначают одну роль каждому узлу. Louvain разбивает граф на кластеры; отдельная формула рассчитывает приоритет для проверки.
+4. Программа создаёт в `out/` файлы `nodes_roles.csv`, `clusters.csv` и `top_nodes.csv` и проверяет их содержимое.
+5. `viewer.py` показывает локальную страницу: аналитик вводит `gid`, читает обоснование и видит входящие и исходящие связи.
 
-| File | Specified fields | Specified size |
-| --- | --- | ---: |
-| `edges.parquet` | `src`, `dst`, `sum_kzt`, `n_tx`, `depth` | 3,119 aggregated directed edges |
-| `nodes.parquet` | `gid`, `depth`, `is_seed` | 2,248 nodes |
-| `transactions.parquet` | `src`, `dst`, `date`, `sum_kzt` | 4,840 transactions |
+Схема компонентов находится в [ARCHITECTURE.md](ARCHITECTURE.md). Основной расчёт не зависит от LLM, внешнего API или ручного редактирования данных.
 
-The supplied files were checked for row counts, unique identifiers, non-null required fields, and agreement between aggregated edges and individual transactions.
+## Технологии
 
-## Required outputs
-
-| Artifact | Required fields / behavior |
+| Компонент | Назначение |
 | --- | --- |
-| `nodes_roles.csv` | `gid`, `role`, `role_score`, `cluster_id`, `priority_score`, `evidence`; one row for each of the 2,248 nodes; `evidence` is human-readable and at most 200 characters |
-| `clusters.csv` | `cluster_id`, `n_nodes`, `n_seed`, `sum_kzt_internal`, `top_gids`, `hypothesis` |
-| `top_nodes.csv` | `rank`, `gid`, `role`, `priority_score`, `why`; at least 20 ranked nodes |
-| Graph viewer | Directed network view with roles/clusters and search by `gid`, showing the selected node's links |
+| Python 3.10 | Расчёт, проверки и локальный HTTP-сервер |
+| pandas, pyarrow | Чтение Parquet, агрегирование транзакций, запись CSV |
+| NetworkX, NumPy, SciPy | Графовые показатели, PageRank, кластеры Louvain |
+| `run_pipeline.py` | Валидация → признаки → роли → кластеры → рейтинг → CSV |
+| `viewer.py` | Локальный просмотр результатов по `gid` |
+| `tests/test_pipeline.py` | Проверка полного сценария и контрольных графов |
 
-## Required roles
+AI-модели, GPU, облачные сервисы и API OpenAI/NVIDIA **для запуска не используются**. AI-агент Codex применялся при разработке проекта.
 
-Every node receives exactly one primary role from this vocabulary:
+## Системные требования и настройка
 
-| Role | Meaning in the case specification |
-| --- | --- |
-| `consolidator` | Receives funds from multiple participants |
-| `transit` | Passes funds onward rather than retaining them |
-| `distributor` | Sends funds to many recipients |
-| `terminal` | Visible endpoint where funds appear to remain |
-| `coordinator` | Structurally important node that may warrant organizer-focused review |
-| `peripheral` | No stronger role signal identified |
+- Проверенная среда: 64-битная Windows 10, 64-битный Python 3.10.11. Команды для macOS/Linux приведены ниже, но отдельно на этих системах не проверялись.
+- Нужны модули Python `venv` и `pip`, браузер для просмотра результата и доступ к Python Package Index либо локальным пакетам при установке зависимостей.
+- Точные версии пяти библиотек закреплены в `requirements.txt`. Все входные данные находятся в `data/`; отдельная загрузка датасета не нужна.
+- **Переменные окружения не требуются.** Ключи API, личные аккаунты, подписки и демонстрационные учётные записи не нужны. После установки пакетов расчёт и просмотр работают без интернета.
+- По умолчанию входная папка — `data/`, выходная — `out/`, адрес страницы — `127.0.0.1:8765`. Параметры `--data` и `--out` доступны обеим программам; `--host` и `--port` — просмотрщику.
 
-These are **analytical hypotheses**, not statements that a client committed a crime.
+## Установка и запуск
 
-## Core constraints
-
-- All **2,248** nodes must receive a role, `role_score`, `cluster_id`, `priority_score` and nonempty evidence.
-- `role_score` and `priority_score` must each be within `[0, 1]`.
-- Every role and priority must be explainable from calculated graph features. Formal role criteria and thresholds must be documented before submission.
-- `top_nodes.csv` must contain at least **20** nodes with a human-readable reason.
-- The complete pipeline from raw Parquet files to the three CSV outputs must run in **under five minutes** on an ordinary laptop.
-- Execution must be local and reproducible from the README, without a paid service, GPU cluster or manual data edits.
-- No hardcoded `gid` results, black-box role assignment or invented client attributes.
-- AML conclusions must be phrased as **hypotheses for analyst review**, never assertions of guilt.
-
-## Known data limitations
-
-These are properties of the supplied graph described in the case specification and considered by the implementation.
-
-- **Depth-4 truncation:** traversal stops after four hops. The 444 nodes at `depth=4` with no visible outgoing edge cannot automatically be treated as true terminal recipients.
-- **Outgoing-only collection:** the export follows outgoing transfers from seeds. Visible incoming and outgoing amounts do not establish full account balances.
-- **Incomplete seed inflow:** money received by seed clients from outside the sampled graph is not fully visible; flow ratios for seeds can be misleading.
-- **5,000 KZT threshold:** transfers below this threshold are absent from the export.
-- **Disconnected components:** the specification reports 16 weakly connected components; analysis must not assume one connected network.
-- **No role ground truth:** the dataset has no labeled true roles. Role quality is judged by transparent, defensible criteria rather than classification accuracy.
-
-## Architecture
-
-```text
-Parquet → input validation → directed graph → graph features
-        → deterministic role rules → clustering → priority scoring
-        → evidence generation → CSV validation/export → lightweight graph viewer
-```
-
-**The mandatory analytical core is deterministic and does not depend on an LLM.** Every assigned role and priority must be traceable to calculated graph features. The viewer and any optional AI assistant must not be required for generating the CSVs.
-
-## System requirements and dependencies
-
-- **Verified environment:** 64-bit Windows 10 and 64-bit Python 3.10.11. The macOS/Linux commands below use the same Python code but have not been independently verified on those systems.
-- **Python:** use a 64-bit Python 3.10 installation and its `venv`/`pip` modules. A standard web browser is needed for the viewer.
-- **Install-time access:** `pip install` needs access to the Python package index or an equivalent local wheel cache. After installation, the pipeline and viewer run locally without internet access.
-- **Input files:** `data/nodes.parquet`, `data/edges.parquet`, and `data/transactions.parquet` are committed to this repository. No separate dataset download is needed.
-- **Python packages:** exact versions of pandas, pyarrow, NetworkX, NumPy and SciPy are pinned in `requirements.txt`. SciPy is used by NetworkX's PageRank.
-- **Configuration:** no environment variables, API keys, model downloads, personal accounts, subscriptions, or external services are required. The viewer listens only on `127.0.0.1:8765` by default. `--data`, `--out`, `--host`, and `--port` are optional command-line parameters where applicable.
-
-No LLM or GPU is needed.
-
-## Install, run and verify
-
-Run these commands from the repository root, which contains `README.md`, `requirements.txt`, `run_pipeline.py`, `viewer.py`, and `data/`. On Windows PowerShell:
+Откройте PowerShell **в корне репозитория** (там находятся `README.md`, `requirements.txt`, `run_pipeline.py` и папка `data/`). Выполните команды по порядку:
 
 ```powershell
 python --version
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 .venv\Scripts\python run_pipeline.py
-.venv\Scripts\python -m unittest discover -s tests -v
 ```
 
-Expected result: `run_pipeline.py` prints `Validated 2248 nodes, 3119 edges`, a runtime under 300 seconds, and the absolute output path. It creates `out/nodes_roles.csv` (2,248 data rows), `out/clusters.csv` (66 data rows on the supplied dataset), and `out/top_nodes.csv` (20 data rows). The test command must finish with `Ran 4 tests` and `OK`. It reruns the pipeline in temporary directories and verifies CSV schema, determinism, depth-4 handling, temporal ordering and arbitrary `gid` lookup. `out/` is generated locally and intentionally excluded from Git.
+Первая команда должна показать Python 3.10.x. Последняя печатает `Validated 2248 nodes, 3119 edges`, количество кластеров, путь к `out/` и время работы. На проверенной машине расчёт занимает около одной секунды; требование кейса — менее пяти минут.
 
-Then start the viewer in the same terminal; leave it running while using the browser:
+На macOS/Linux создайте окружение командой `python3 -m venv .venv`, затем используйте `.venv/bin/python` вместо `.venv\Scripts\python` в остальных командах. Если входные или выходные файлы расположены иначе, запустите `run_pipeline.py --data PATH --out PATH`, а затем `viewer.py --data PATH --out PATH` с теми же путями.
 
-```powershell
-.venv\Scripts\python viewer.py
-```
+## Как жюри проверить решение
 
-Open the local URL printed by the viewer (normally `http://127.0.0.1:8765/`). The page opens a top-ranked node by default. Enter any exact `gid` copied from `out/nodes_roles.csv`, press **Показать**, and verify that the node's role, numerical evidence, cluster and directed incoming/outgoing links appear. The search field is text so 18-digit IDs are not rounded by the browser. Stop the viewer with `Ctrl+C`. No login or network connection is involved.
+1. После расчёта должны появиться `out/nodes_roles.csv` (2 248 строк данных), `out/clusters.csv` (66 строк данных на предоставленном наборе) и `out/top_nodes.csv` (20 строк данных). В `nodes_roles.csv` у каждого `gid` заполнены `role`, `role_score`, `cluster_id`, `priority_score`, `evidence`; оценки лежат в `[0, 1]`.
+2. Запустите тесты:
 
-On macOS/Linux, use `python3 -m venv .venv`, then replace `.venv\Scripts\python` in the commands above with `.venv/bin/python`. If port 8765 is occupied, start `viewer.py --port 8766` and open the URL it prints. To use nondefault folders, run `run_pipeline.py --data PATH --out PATH` and then `viewer.py --data PATH --out PATH` with the same paths. If an input file is missing or malformed, the pipeline exits with an explanatory error; it does not silently generate placeholder results.
+   ```powershell
+   .venv\Scripts\python -m unittest discover -s tests -v
+   ```
 
-## Role rules and explanation
+   Ожидается `Ran 4 tests` и `OK`. Тесты повторно рассчитывают CSV и проверяют их совпадение, полный охват `gid`, защиту обрыва четвёртого колена, порядок переводов и поиск произвольного узла.
+3. Запустите страницу просмотра:
 
-The pipeline calculates visible in/out degrees, KZT totals, transaction counts, weighted PageRank, seed reach, depth, `out_kzt / in_kzt`, and later-day flow support from individual transaction dates. Only observed transfers are described. Role cutoffs are derived from the input distribution and printed at each run. For the supplied dataset, the measured cutoffs are: fan-in ≥3, fan-out ≥8, incoming KZT ≥166,819.7, outgoing KZT ≥397,500, PageRank ≥0.00180444, and minimum two-sided flow ≥43,500 KZT.
+   ```powershell
+   .venv\Scripts\python viewer.py
+   ```
 
-| Role | Deterministic candidate rule |
+   Откройте напечатанный адрес, обычно `http://127.0.0.1:8765/`. Страница сразу покажет первый узел рейтинга. Скопируйте любой `gid` из `out/nodes_roles.csv`, вставьте в поиск и нажмите **«Показать»**. Должны появиться роль, числовое обоснование, кластер и направленные связи. Поле ввода хранит 18-значный `gid` как текст, без округления. Остановить сервер можно сочетанием `Ctrl+C`.
+
+Если порт 8765 занят, используйте `viewer.py --port 8766` и откройте адрес, который программа напечатает. Если входной файл отсутствует либо имеет неверную структуру, расчёт завершится с сообщением об ошибке вместо фиктивного результата. Папка `out/` создаётся локально и в Git не хранится.
+
+## Данные и результаты
+
+Источник — анонимизированный набор организаторов HackAlem AI за июль 2026 года; он включён в репозиторий. Полная схема описана в [data/README.md](data/README.md).
+
+| Входной файл | Содержимое | Строк |
+| --- | --- | ---: |
+| `data/nodes.parquet` | `gid`, минимальная глубина, признак исходного клиента | 2 248 |
+| `data/edges.parquet` | Плательщик → получатель, общая сумма, число переводов | 3 119 |
+| `data/transactions.parquet` | Отдельные переводы с датами и суммами | 4 840 |
+
+| Выходной файл | Основные поля |
 | --- | --- |
-| `consolidator` | Fan-in at/above the 90th percentile of positive in-degrees (minimum 3) **and** visible incoming sum at/above the 75th percentile. A seed's role score is capped because its incoming flow is incomplete. |
-| `distributor` | Fan-out at/above the 90th percentile of positive out-degrees (minimum 3) **and** visible outgoing sum at/above the 75th percentile. |
-| `transit` | Non-seed with visible input and output, minimum of those amounts at/above the median two-sided flow, `out_kzt / in_kzt` in `[0.8, 1.2]`, and later-day supported outflow at least 50% of the smaller visible in/out total. |
-| `terminal` | Non-seed at depth below 4, with a visible incoming edge and no visible outgoing edge. This is only a possible endpoint *within the export*. |
-| `coordinator` | At least two incoming and two outgoing counterparties, reachable from at least two seeds, and PageRank at/above its 98th percentile. This indicates structural importance, not an identified organizer. |
-| `peripheral` | No stronger candidate; depth-4 truncated nodes with no outgoing edge stay here rather than becoming `terminal`. |
+| `out/nodes_roles.csv` | `gid`, `role`, `role_score`, `cluster_id`, `priority_score`, `evidence`; также вычисленные признаки |
+| `out/clusters.csv` | `cluster_id`, `n_nodes`, `n_seed`, `sum_kzt_internal`, `top_gids`, `hypothesis` |
+| `out/top_nodes.csv` | `rank`, `gid`, `role`, `priority_score`, `why` |
 
-For later-day support, the pipeline processes each node's daily transaction totals in date order. An outgoing amount can use only previously observed incoming amount from an earlier **calendar day**; same-day ordering is unknown and provides no support. This is a conservative structural check, not a tracing of individual banknotes or proof that the funds are identical. The 50% cutoff is an explicit heuristic, not a learned or regulatory threshold. `nodes_roles.csv` includes `temporal_support_kzt` and `temporal_support_ratio` for inspection.
+Внешних интеграций при работе программы нет. Сторонние AML-датасеты не нужны и не загружаются.
 
-When multiple rules match, the strongest bounded role signal wins with a fixed tie order. `role_score` is the strength of visible evidence, **not a calibrated probability**. Every row includes numbers in `evidence`. The score and evidence do not imply guilt.
+## Правила ролей и приоритета
 
-Louvain partitions an undirected projection using log-scaled transfer weights and a fixed seed. Direction is retained in role features, internal cluster sums, and the viewer. Cluster IDs are ordered by their smallest `gid`. The cluster `hypothesis` is generated from observed size, seed count and internal volume; it is not a criminal allegation.
+Признаки вычисляются **только по видимым переводам**: количество контрагентов на входе и выходе, суммы и число переводов, взвешенный PageRank, глубина, достижимость от исходных клиентов и отношение `out_kzt / in_kzt`. Для предоставленных данных расчётные пороги: fan-in ≥3, fan-out ≥8, вход ≥166 819,7 KZT, выход ≥397 500 KZT, PageRank ≥0,00180444, двусторонний поток ≥43 500 KZT. Программа печатает пороги при каждом запуске.
 
-`priority_score` aggregates equal-weight percentile ranks of role signal, counterparties, visible volume and structural position/seed reach; the final score is ranked to `[0,1]`. Depth-4 truncated endpoints receive a reduction because downstream activity is unknown. Ties use ascending `gid`. `top_nodes.csv` includes concrete values in `why`. Equal weights are a transparent starting assumption, not domain-calibrated risk weights.
+| Роль | Формальное условие кандидата |
+| --- | --- |
+| `consolidator` | Число входящих контрагентов не ниже 90-го процентиля среди положительных значений (минимум 3), а видимый вход — не ниже 75-го процентиля. Для исходных клиентов оценка роли ограничена из-за неполноты входящих данных. |
+| `distributor` | Число исходящих контрагентов не ниже 90-го процентиля (минимум 3), а видимый выход — не ниже 75-го процентиля. |
+| `transit` | Не исходный клиент; есть вход и выход; меньшая из сумм не ниже медианы двустороннего потока; отношение выхода к входу в `[0.8, 1.2]`; поддержанный более поздними днями выход не ниже 50% меньшей из двух сумм. |
+| `coordinator` | Не менее двух входящих и двух исходящих связей, достижимость от двух исходных клиентов и PageRank не ниже 98-го процентиля. |
+| `terminal` | Не исходный клиент на глубине менее 4, с видимым входом и без видимого выхода. Это конечная точка **в пределах выгрузки**. |
+| `peripheral` | Более сильного ролевого признака нет. Узел глубины 4 без видимого выхода не считается автоматически `terminal`. |
 
-## Research-informed interpretation
+Для временно́й проверки дневные суммы обрабатываются по порядку. Исходящий перевод может опираться только на видимый вход **из предыдущего календарного дня или ранее**: внутри одного дня время операций неизвестно. Это не доказывает, что далее ушли те же деньги. Порог 50% — открытое эвристическое решение, а не норматив или обученная модель. Столбцы `temporal_support_kzt` и `temporal_support_ratio` позволяют проверить его влияние.
 
-The [IBM AMLworld paper](https://proceedings.neurips.cc/paper_files/paper/2023/file/5f38404edff6f3f642d6fa5892479c42-Paper-Datasets_and_Benchmarks.pdf) defines fan-in, fan-out, gather-scatter and other **transaction subgraph patterns**. They help describe why our visible in/out-degree rules are useful, but they are not labels for individual clients and do not establish laundering. In particular, `transit` combines a similar *monthly total* with later-day support; it does not prove that the same funds moved onward. `coordinator` is based on seed reach and PageRank; the pipeline does not claim to detect cycles or ownership. The [IBM dataset description](https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml) also explains why a bank's partial view matters, supporting our explicit depth and seed caveats.
+Если одному узлу подходят несколько ролей, выбирается наиболее сильный сигнал с фиксированным разрешением равенства. `role_score` означает силу видимых признаков, **не вероятность преступления**. Для кластеров Louvain используется ненаправленная проекция с логарифмом сумм и фиксированным начальным значением; направление сохраняется при расчёте ролей и показе связей. `priority_score` объединяет равновесные процентильные ранги силы роли, числа контрагентов, видимого оборота, PageRank и связи с исходными клиентами. Узлы на границе четвёртого колена получают понижение приоритета. В `evidence` и `why` приводятся числовые основания.
 
-IBM AMLworld and [SAML-D](https://www.kaggle.com/datasets/berkanoztas/synthetic-transaction-monitoring-dataset-aml/versions/2) contain synthetic suspicious-transaction labels. They are potential **separate** stress-test data, not a ground truth for this case's six roles. A valid transfer test would need to recreate this case's one-month, outgoing-only, four-hop, 5,000-KZT observation window and separately define what a flagged *node* means before reporting precision or recall. No such external benchmark has been run here, and neither dataset is required to reproduce the submission.
+## Известные ограничения
 
-## Scalability
+- Обход ограничен четырьмя коленами. У 444 узлов глубины 4 без видимого выхода дальнейшие переводы неизвестны.
+- Выгрузка построена по исходящим переводам от исходных клиентов. Входящие переводы к ним извне графа и переводы меньше 5 000 KZT не видны; наблюдаемый поток не равен полному балансу.
+- Даты имеют точность до дня. Внутридневной порядок переводов определить нельзя; временная проверка не устанавливает происхождение средств.
+- В наборе нет эталонной разметки ролей. Качество ролей нельзя честно представить как точность классификатора; это объяснимые гипотезы для аналитика.
+- Просмотрщик выводит до 16 крупнейших входящих и исходящих рёбер выбранного узла; суммарные счётчики учитывают все связи.
+- Реализация рассчитана на предоставленные 2 248 узлов. Для графа на миллионы узлов понадобятся другие средства хранения и обработки.
+- Испытания выполнены на Windows 10; запуск на других системах отдельно не подтверждён. Командная репетиция пятиминутной демонстрации остаётся организационной задачей.
 
-The supplied 2,248-node graph runs locally in seconds. At about one million nodes, NetworkX object overhead, PageRank, Louvain and rendering would need replacement with chunked Parquet processing, a compact graph engine such as igraph, and indexed neighborhood queries. The current viewer intentionally draws at most 16 edges in each direction for a selected node while reporting full counts.
+## Развёрнутая версия
 
-## Definition of Done
+Публичного развёртывания нет. Проект запускается локально по инструкции выше без учётных записей.
 
-- [x] One command runs from raw Parquet to three validated CSVs in under five minutes (measured 3.95 seconds on the development machine).
-- [x] `nodes_roles.csv` covers exactly 2,248 unique `gid` values with required fields, valid roles, bounded scores and evidence.
-- [x] All six role rules and measured thresholds are documented; numerical evidence is available for arbitrary nodes.
-- [x] Every node has a cluster; `clusters.csv` reports size, seed count, internal volume, top nodes and a cautious hypothesis.
-- [x] `top_nodes.csv` contains 20 deterministically ranked nodes with reasons.
-- [x] The local viewer finds arbitrary `gid` values and shows directed incoming/outgoing links, roles and clusters.
-- [x] A one-page pipeline diagram is available in `ARCHITECTURE.md`.
-- [ ] A timed five-minute team demo remains to be rehearsed.
+## Источники и раскрытие сторонних материалов
 
-## Development status
-
-The deterministic pipeline and local viewer are implemented. On the provided data, the pipeline produces 2,248 role rows, 66 clusters and 20 top rows in seconds. Four unittest cases passed, including deterministic reruns, depth-4 protection, later-day transit checks and arbitrary-`gid` viewer rendering; one HTTP request to the viewer returned status 200. These checks establish basic operation, not expert validation of AML role quality.
-
-## Sources and attribution
-
-- `data/` and `data/README.md`: anonymized HackAlem AI organizer dataset, supplied for this competition.
-- `starter/`: organizer-provided starter code and instructions. It loads Parquet, builds a directed graph and calculates baseline metrics; its CSV role/cluster/priority values are placeholders. This project's `run_pipeline.py`, role rules, validation and viewer were developed during the competition.
-- Python dependencies and exact installed versions are listed in `requirements.txt`; their respective open-source licenses apply.
+- `data/` и [data/README.md](data/README.md) — набор, предоставленный организаторами HackAlem AI.
+- `starter/` — предоставленный организаторами стартовый код для загрузки Parquet и базовых графовых метрик. Его выходные роли и приоритеты были заглушками; правила, проверки и просмотрщик этого проекта разработаны в ходе соревнования.
+- Перечень Python-библиотек и их версии находятся в `requirements.txt`; применяются соответствующие открытые лицензии.
+- [Статья IBM AMLworld](https://proceedings.neurips.cc/paper_files/paper/2023/file/5f38404edff6f3f642d6fa5892479c42-Paper-Datasets_and_Benchmarks.pdf) использована как методический источник терминов fan-in и fan-out. Паттерн транзакций не является меткой виновности конкретного клиента. Чужой код и внешние AML-датасеты в проект не включены.
