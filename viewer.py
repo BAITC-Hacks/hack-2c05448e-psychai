@@ -6,6 +6,8 @@ import argparse
 import html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import secrets
+import threading
 from urllib.parse import parse_qs, urlparse
 import webbrowser
 
@@ -89,7 +91,7 @@ def svg_for(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame) -> str:
 
 
 def page(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame, clusters: pd.DataFrame,
-         top: pd.DataFrame) -> str:
+         top: pd.DataFrame, shutdown_token: str | None = None) -> str:
     if gid not in nodes.index:
         body = f'<section class="card"><h2>Узел не найден</h2><p>gid {gid} отсутствует в данных. Скопируйте идентификатор из nodes_roles.csv или выберите строку топ-20 ниже.</p></section>'
     else:
@@ -176,6 +178,14 @@ def page(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame, clusters: pd.DataFr
         '<th>Исходные</th><th>Оборот</th><th></th></tr></thead>'
         f'<tbody>{cluster_rows}</tbody></table></div></div></div></section>'
     )
+    stop_control = (
+        '<section class="card"><h2>Завершить демо</h2>'
+        '<p>Остановит только этот локальный сервер. Для нового запуска снова откройте LaunchDemo.vbs.</p>'
+        '<form method="post" action="/shutdown">'
+        f'<input type="hidden" name="token" value="{shutdown_token}">'
+        '<button type="submit">Остановить сервер</button></form></section>'
+        if shutdown_token else ""
+    )
     return f"""<!doctype html><html lang="ru"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Граф денег — разбор сети</title>
 <style>body{{font:16px/1.5 system-ui;margin:0;background:#f3f6fb;color:#172033}}
@@ -218,13 +228,14 @@ a{{color:#1d4ed8}}small{{color:#52647c}}.role{{font-size:1.25rem}}</style>
 <div class="table-wrap"><table><thead><tr><th>№</th><th>gid</th><th>Роль</th><th>Приоритет</th><th>Почему в топе</th></tr></thead>
 <tbody>{top_rows}</tbody></table></div></section>
 <p class="caution">Данные неполные: обход обрывается на четвёртом колене, переводы меньше 5 000 KZT не видны,
-а суммы внутри графа не показывают полный баланс клиента.</p></main></html>"""
+а суммы внутри графа не показывают полный баланс клиента.</p>{stop_control}</main></html>"""
 
 
 def serve(data_dir: Path, out_dir: Path, host: str, port: int,
-          open_browser: bool = True) -> None:
+          open_browser: bool = True, allow_shutdown: bool = False) -> None:
     nodes, edges, clusters, top = load_view(data_dir, out_dir)
     default_gid = int(top.iloc[0].gid)
+    shutdown_token = secrets.token_urlsafe(24) if allow_shutdown else None
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             query = parse_qs(urlparse(self.path).query)
@@ -232,12 +243,37 @@ def serve(data_dir: Path, out_dir: Path, host: str, port: int,
                 gid = int(query.get("gid", [default_gid])[0])
             except ValueError:
                 gid = default_gid
-            content = page(gid, nodes, edges, clusters, top).encode("utf-8")
+            content = page(gid, nodes, edges, clusters, top, shutdown_token).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+
+        def do_POST(self):
+            if urlparse(self.path).path != "/shutdown" or shutdown_token is None:
+                self.send_error(404)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self.send_error(400)
+                return
+            if not 0 < length <= 1024 or self.client_address[0] not in ("127.0.0.1", "::1"):
+                self.send_error(403)
+                return
+            form = parse_qs(self.rfile.read(length).decode("ascii", errors="ignore"))
+            received = form.get("token", [""])[0]
+            if not secrets.compare_digest(received, shutdown_token):
+                self.send_error(403)
+                return
+            content = '<!doctype html><html lang="ru"><meta charset="utf-8"><h1>Демо остановлено</h1><p>Это окно можно закрыть.</p></html>'.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
     with ThreadingHTTPServer((host, port), Handler) as server:
         browser_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
         if ":" in browser_host:

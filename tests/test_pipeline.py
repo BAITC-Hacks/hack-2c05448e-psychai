@@ -1,9 +1,15 @@
 """Behavior checks for the required Money Graph outputs and data traps."""
 
 from pathlib import Path
+import queue
+import re
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
+from urllib.parse import urlencode, urlsplit
+from urllib.request import Request, urlopen
 
 import networkx as nx
 import pandas as pd
@@ -87,6 +93,34 @@ class SyntheticGraphTests(unittest.TestCase):
 
 
 class FullDatasetTests(unittest.TestCase):
+    def test_launcher_viewer_can_be_stopped_only_with_page_token(self):
+        if not (ROOT / "data" / "nodes.parquet").exists():
+            self.skipTest("Organizer dataset not present")
+        opened = queue.Queue()
+        with patch("viewer.webbrowser.open", side_effect=lambda url, new=2: opened.put(url) or True):
+            server = threading.Thread(
+                target=serve,
+                args=(ROOT / "data", ROOT / "submission", "127.0.0.1", 0),
+                kwargs={"allow_shutdown": True}, daemon=True,
+            )
+            server.start()
+            url = opened.get(timeout=5)
+            with urlopen(url, timeout=5) as response:
+                page_html = response.read().decode("utf-8")
+            token = re.search(r'name="token" value="([^"]+)"', page_html)
+            self.assertIsNotNone(token)
+            parts = urlsplit(url)
+            stop_url = f"http://{parts.netloc}/shutdown"
+            invalid = Request(stop_url, data=urlencode({"token": "wrong"}).encode("ascii"))
+            with self.assertRaises(HTTPError) as error:
+                urlopen(invalid, timeout=5)
+            self.assertEqual(error.exception.code, 403)
+            valid = Request(stop_url, data=urlencode({"token": token.group(1)}).encode("ascii"))
+            with urlopen(valid, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+            server.join(timeout=5)
+            self.assertFalse(server.is_alive())
+
     def test_viewer_opens_browser_by_default_and_supports_headless_mode(self):
         if not (ROOT / "data" / "nodes.parquet").exists():
             self.skipTest("Organizer dataset not present")
