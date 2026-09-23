@@ -70,6 +70,7 @@ class FullDatasetTests(unittest.TestCase):
             run(ROOT / "data", Path(second))
             for name in ("nodes_roles.csv", "clusters.csv", "top_nodes.csv"):
                 self.assertEqual((Path(first) / name).read_bytes(), (Path(second) / name).read_bytes())
+            self.assertTrue((Path(first) / "nodes_roles.csv").read_bytes().startswith(b"gid,"))
             roles = pd.read_csv(Path(first) / "nodes_roles.csv")
             clusters = pd.read_csv(Path(first) / "clusters.csv")
             top = pd.read_csv(Path(first) / "top_nodes.csv")
@@ -80,6 +81,7 @@ class FullDatasetTests(unittest.TestCase):
             rendered = page(arbitrary_gid, roles.set_index("gid", drop=False), edges, clusters, top)
             self.assertIn(f"gid {arbitrary_gid}", rendered)
             self.assertIn("<svg", rendered)
+            self.assertIn('type="text" inputmode="numeric"', rendered)
 
 
 if __name__ == "__main__":

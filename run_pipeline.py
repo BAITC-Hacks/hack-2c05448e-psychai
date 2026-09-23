@@ -233,7 +233,7 @@ def run(data_dir: Path, out_dir: Path) -> dict[str, float]:
     out_dir.mkdir(parents=True, exist_ok=True)
     for name, frame in (("nodes_roles.csv", role_rows), ("clusters.csv", cluster_rows),
                         ("top_nodes.csv", top_rows)):
-        frame.to_csv(out_dir / name, index=False, encoding="utf-8-sig")
+        frame.to_csv(out_dir / name, index=False, encoding="utf-8")
     elapsed = time.perf_counter() - started
     print(f"Validated {len(nodes)} nodes, {len(edges)} edges; {len(cluster_rows)} clusters.")
     print(f"Role counts: {df.role.value_counts().to_dict()}")

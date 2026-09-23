@@ -49,8 +49,16 @@ def svg_for(gid: int, nodes: pd.DataFrame, edges: pd.DataFrame) -> str:
     def node(x: int, y: float, value: int, radius: int = 17) -> None:
         role = str(nodes.loc[value, "role"]) if value in nodes.index else "peripheral"
         color = COLORS.get(role, COLORS["peripheral"])
-        parts.append(f'<circle cx="{x}" cy="{y:.1f}" r="{radius}" fill="{color}"/>')
-        parts.append(f'<text x="{x}" y="{y + 4:.1f}" text-anchor="middle" fill="white" font-size="12">{value}</text>')
+        same_cluster = value in nodes.index and nodes.loc[value, "cluster_id"] == nodes.loc[gid, "cluster_id"]
+        outline = "#eab308" if same_cluster else "#cbd5e1"
+        parts.append(f'<a href="/?gid={value}"><circle cx="{x}" cy="{y:.1f}" r="{radius}" '
+                     f'fill="{color}" stroke="{outline}" stroke-width="4">'
+                     f'<title>gid {value}: {html.escape(role)}</title></circle></a>')
+        label_x = 28 if x < 300 else (845 if x > 700 else x)
+        label_y = y + 4 if x != 500 else y + 48
+        anchor = "middle" if x == 500 else "start"
+        parts.append(f'<text x="{label_x}" y="{label_y:.1f}" text-anchor="{anchor}" '
+                     f'font-size="11" fill="#172033">{value}</text>')
     for index, row in enumerate(left):
         y = 70 + index * 44
         parts.append(f'<line x1="210" y1="{y}" x2="472" y2="{center_y:.1f}" stroke="#64748b" '
@@ -106,9 +114,9 @@ a{{color:#1d4ed8}}</style>
 <h1>Граф денег</h1><p>Локальная схема направленных переводов · {len(nodes)} узлов ·
 {len(edges)} рёбер · {len(clusters)} кластеров. Роли — гипотезы для проверки аналитиком.</p>
 <form method="get"><label for="gid">Поиск gid: </label>
-<input id="gid" name="gid" type="number" value="{gid}" required>
+<input id="gid" name="gid" type="text" inputmode="numeric" pattern="[0-9]+" value="{gid}" required>
 <button type="submit">Показать</button></form>
-<p>{legend}</p>{body}
+<p>{legend} · <span style="color:#b45309">◉ жёлтая обводка: кластер выбранного узла</span></p>{body}
 <h3>Топ-20 для проверки</h3><p>{links}</p>
 <p>Видимые суммы не являются полным балансом. Узлы на глубине 4 обрезаны границей обхода;
 переводы ниже 5000 KZT отсутствуют.</p></html>"""
