@@ -94,6 +94,11 @@ class FullDatasetTests(unittest.TestCase):
             run(ROOT / "data", Path(second))
             for name in ("nodes_roles.csv", "clusters.csv", "top_nodes.csv"):
                 self.assertEqual((Path(first) / name).read_bytes(), (Path(second) / name).read_bytes())
+                self.assertEqual(
+                    (ROOT / "submission" / name).read_text(encoding="utf-8").splitlines(),
+                    (Path(first) / name).read_text(encoding="utf-8").splitlines(),
+                    f"Published submission/{name} differs from a fresh calculation",
+                )
             self.assertTrue((Path(first) / "nodes_roles.csv").read_bytes().startswith(b"gid,"))
             roles = pd.read_csv(Path(first) / "nodes_roles.csv")
             clusters = pd.read_csv(Path(first) / "clusters.csv")
